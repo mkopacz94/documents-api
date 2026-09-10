@@ -1,40 +1,86 @@
 # Documents API
 
-ASP.NET Core Web API for signing PDF documents. A caller uploads a PDF and a
-username; the API stamps the username and the signing date/time onto the
-document, records the signing event in a MySQL database via EF Core, and
-returns the signed PDF so the caller can save it.
+ASP.NET Core Web API for the PIRT Dashboard's document sign-off workflow. A
+document is uploaded once, then goes through three sequential signature
+stages - **Opracował** (prepared), **Sprawdził** (checked), **Zatwierdził**
+(approved) - each by a different, authorized user. Every stage stamps a row
+of a signature table (name + UTC timestamp) onto the PDF, and every
+successful signing is logged to MySQL via EF Core together with a hash of
+the resulting document.
 
-## How it works
+## Workflow
 
-1. `POST /api/documents/sign` accepts a `multipart/form-data` request with:
-   - `file` — the PDF to sign
-   - `username` — the signer's name
-2. The API validates the upload (non-empty, PDF content type/extension, size limit).
-3. `PdfSigningService` stamps `Signed by <username> on <UTC timestamp>` onto
-   the document (bottom-right of the last page by default) using
-   [PdfSharpCore](https://github.com/ststeiger/PdfSharpCore), with a font
-   embedded in the assembly so the output doesn't depend on fonts installed
-   on the host.
-4. A `DocumentSignature` row (file name, signer, UTC timestamp, SHA-256 hash
-   of the signed PDF) is written to MySQL via EF Core.
-5. The signed PDF bytes are returned as `application/pdf` for the caller to
-   download/save. The new signature's database id is returned in the
-   `X-Signature-Id` response header.
+1. `POST /api/documents` - upload a new document. Rejected if:
+   - empty, over the size limit, or not a PDF
+   - the file name doesn't follow the `<RepositoryId>#<ProjectName>#<Version>.pdf`
+     convention (e.g. `729#VIPD2#v1.00.16.pdf`)
+   - a document with that exact name already exists (bump the version instead -
+     this is the versioning/no-duplicate-names requirement)
 
-## Project layout
+   On success, a blank three-row signature table is stamped onto the last
+   page and the document is stored, unsigned.
 
+2. `GET /api/documents/{id}` - current status: which categories are signed,
+   by whom, and which category is expected next. Backs the "view with
+   signing capability" screen (the frontend renders its own confirmation
+   dialog before calling sign).
+
+3. `POST /api/documents/{id}/sign` - signs the document for one category
+   (`{"category":"Opracowal"}` / `Sprawdzil` / `Zatwierdzil`). Rejected if:
+   - that category is already signed
+   - it's signed out of order (categories must be applied Opracował → Sprawdził → Zatwierdził)
+   - the caller doesn't hold the role mapped to that category (403)
+
+   The signer's identity is taken from the authenticated caller's claims,
+   never from the request body.
+
+4. `GET /api/documents/{id}/file` - downloads the document in its current
+   state.
+
+5. `POST /api/documents/verify` - hash-verification tool: upload a PDF, get
+   back whether it matches a document/stage this API produced (comparing
+   against the hashes recorded in the database).
+
+## Authentication & permission groups
+
+This API does **not** manage its own users. It trusts an external identity
+provider and expects a bearer JWT with role/group claims - configure the
+provider under `Auth` in `appsettings.json`:
+
+```json
+"Auth": {
+  "Authority": "https://your-identity-provider/issuer",
+  "Audience": "documents-api",
+  "RoleClaimType": "...",
+  "NameClaimType": "..."
+}
 ```
-src/DocumentsApi.Api/
-  Controllers/DocumentsController.cs   # POST /api/documents/sign
-  Services/PdfSigningService.cs        # stamps the PDF
-  Services/DocumentSignatureRepository.cs # persists the audit record
-  Data/AppDbContext.cs                 # EF Core DbContext (MySQL via Pomelo)
-  Data/Entities/DocumentSignature.cs   # audit record entity
-  Data/Migrations/                     # EF Core migrations
-  Pdf/EmbeddedFontResolver.cs          # embedded-font PDF font resolver
-  Options/PdfSignatureOptions.cs       # stamp placement/size configuration
+
+Each signature category requires a distinct role/group from the provider,
+mapped under `SignaturePermissions`:
+
+```json
+"SignaturePermissions": {
+  "Opracowal": "DocumentSigner.Opracowal",
+  "Sprawdzil": "DocumentSigner.Sprawdzil",
+  "Zatwierdzil": "DocumentSigner.Zatwierdzil"
+}
 ```
+
+Create these three groups in your identity provider and assign users to
+whichever stage(s) they're authorized to sign.
+
+### Local development without a real identity provider
+
+If `Auth:Authority` is empty **and** the environment is `Development`, the
+API falls back to a header-based dev auth scheme
+(`Auth/DevHeaderAuthenticationHandler.cs`) so it can be exercised without a
+running OIDC provider. Send:
+
+- `X-Dev-User: alice` - the signed-in user's name
+- `X-Dev-Roles: DocumentSigner.Opracowal,DocumentSigner.Sprawdzil` - comma-separated roles
+
+This path is never used outside Development.
 
 ## Running locally
 
@@ -44,42 +90,66 @@ src/DocumentsApi.Api/
 docker compose up -d
 ```
 
-This starts MySQL 8 on `localhost:3306` with database `documents_api` and
-user `documents_api` / `changeme` (see `docker-compose.yml`).
+Starts MySQL 8 on `localhost:3306` (db `documents_api`, user
+`documents_api` / `changeme` - matches the default connection string).
 
-### 2. Configure the connection string
-
-The default connection string in `appsettings.json` already matches the
-compose file:
-
-```
-Server=localhost;Port=3306;Database=documents_api;User=documents_api;Password=changeme;
-```
-
-Override it for other environments via `ConnectionStrings:DocumentsDb`
-(environment variable `ConnectionStrings__DocumentsDb`), rather than editing
-`appsettings.json`.
-
-### 3. Run the API
+### 2. Run the API
 
 ```bash
 cd src/DocumentsApi.Api
 dotnet run
 ```
 
-EF Core migrations are applied automatically on startup
-(`dbContext.Database.Migrate()` in `Program.cs`), so the schema is created
-the first time the API runs against an empty database.
+Migrations apply automatically on startup. Swagger UI is at `/swagger` in Development.
 
-Swagger UI is available at `/swagger` in the Development environment.
-
-### 4. Try it
+### 3. Try it (dev header auth)
 
 ```bash
-curl -X POST http://localhost:5203/api/documents/sign \
-  -F "file=@/path/to/document.pdf;type=application/pdf" \
-  -F "username=jdoe" \
-  -o signed.pdf
+# Upload
+curl -X POST http://localhost:5203/api/documents \
+  -H "X-Dev-User: alice" \
+  -F "file=@729#VIPD2#v1.00.16.pdf;type=application/pdf"
+# => {"id":1, ...}
+
+# Sign as Opracował
+curl -X POST http://localhost:5203/api/documents/1/sign \
+  -H "X-Dev-User: alice" -H "X-Dev-Roles: DocumentSigner.Opracowal" \
+  -H "Content-Type: application/json" -d '{"category":"Opracowal"}'
+
+# ... Sprawdzil by another user, then Zatwierdzil ...
+
+# Download current state
+curl http://localhost:5203/api/documents/1/file -H "X-Dev-User: alice" -o signed.pdf
+
+# Verify a PDF against the database
+curl -X POST http://localhost:5203/api/documents/verify \
+  -H "X-Dev-User: alice" -F "file=@signed.pdf;type=application/pdf"
+```
+
+## What's deliberately not implemented yet
+
+Per the requirements, this is stage 1. **Not** implemented:
+
+- Copying the signed document into a category-specific folder and exposing
+  a persistent download portal for the signer - the current
+  `IDocumentFileStore`/`LocalDiskDocumentFileStore` is a placeholder
+  abstraction so this can be swapped in without touching the controller.
+
+## Project layout
+
+```
+src/DocumentsApi.Api/
+  Controllers/DocumentsController.cs     # upload / status / sign / download / verify
+  Services/PdfSigningService.cs          # renders the 3-row signature table
+  Services/DocumentRepository.cs         # Document + DocumentSignature persistence
+  Services/LocalDiskDocumentFileStore.cs # original + current PDF bytes on disk
+  Services/SigningFailureLogger.cs       # audit log for failed sign attempts
+  Domain/SignatureCategory.cs            # Opracowal/Sprawdzil/Zatwierdzil + required order
+  Auth/DevHeaderAuthenticationHandler.cs # Development-only auth fallback
+  Data/AppDbContext.cs                   # EF Core DbContext (MySQL via Pomelo)
+  Data/Migrations/                       # EF Core migrations
+  Pdf/EmbeddedFontResolver.cs            # embedded-font PDF font resolver
+  Options/                               # PdfSignature, DocumentStorage, Auth, SignaturePermissions
 ```
 
 ## Managing migrations
@@ -90,13 +160,16 @@ dotnet tool install --global dotnet-ef   # first time only
 dotnet ef migrations add <Name> -o Data/Migrations
 ```
 
-## Configuration
+## Configuration reference
 
-`PdfSignature` section in `appsettings.json` controls stamp placement:
-
-| Key           | Meaning                                             | Default |
-|---------------|------------------------------------------------------|---------|
-| `PageNumber`  | 1-based page to stamp; `0` or less means last page   | `0`     |
-| `FontSize`    | Stamp font size in points                            | `10`    |
-| `MarginRight` | Distance from the right edge of the page, in points  | `40`    |
-| `MarginBottom`| Distance from the bottom edge of the page, in points | `30`    |
+| Section              | Key               | Meaning                                              | Default |
+|-----------------------|-------------------|-------------------------------------------------------|---------|
+| `PdfSignature`        | `FontSize`        | Signature table font size (points)                    | `9`     |
+|                       | `RowHeight`       | Row height (points)                                    | `18`    |
+|                       | `MarginLeft/Right`| Table left/right margins (points)                      | `40`    |
+|                       | `MarginBottom`    | Distance from page bottom (points)                     | `30`    |
+| `DocumentStorage`     | `MaxFileSizeBytes`| Upload size limit                                      | `25 MB` |
+|                       | `BasePath`        | Where original/current PDFs are stored                | `App_Data/documents` |
+| `Auth`                | `Authority`       | External identity provider issuer URL                  | *(empty - dev fallback)* |
+|                       | `Audience`        | Expected JWT audience                                  | *(empty)* |
+| `SignaturePermissions`| `Opracowal` etc.  | Role/group name per signature category                | `DocumentSigner.*` |

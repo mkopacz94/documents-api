@@ -1,19 +1,18 @@
 namespace DocumentsApi.Api.Options;
 
 /// <summary>
-/// Configures where and how the signature stamp is drawn onto a PDF.
+/// Configures how the signature table is drawn onto a document's last page.
 /// Bound from the "PdfSignature" configuration section.
 /// </summary>
 public class PdfSignatureOptions
 {
     public const string SectionName = "PdfSignature";
 
-    /// <summary>
-    /// 1-based page number to stamp. A value less than or equal to 0 means "last page".
-    /// </summary>
-    public int PageNumber { get; set; } = 0;
+    public double FontSize { get; set; } = 9;
 
-    public double FontSize { get; set; } = 10;
+    public double RowHeight { get; set; } = 18;
+
+    public double MarginLeft { get; set; } = 40;
 
     public double MarginRight { get; set; } = 40;
 
