@@ -19,7 +19,7 @@ public class PdfSigningService : IPdfSigningService
 
     public byte[] RenderSignatureTable(byte[] originalPdf, IReadOnlyList<SignatureRowInfo> rows)
     {
-        return WithLastPage(originalPdf, (gfx, page) =>
+        return WithNewBlankPage(originalPdf, (gfx, page) =>
         {
             var layout = GetLayout(page, rows.Count);
             var headerFont = new XFont(EmbeddedFontResolver.FamilyName, _options.FontSize, XFontStyle.Bold);
@@ -40,10 +40,12 @@ public class PdfSigningService : IPdfSigningService
     {
         return WithLastPage(currentPdf, (gfx, page) =>
         {
-            // Table geometry is fixed at upload time (every category's blank row
-            // and every cell border are already burned into currentPdf), so this
-            // only fills in the two cells for one row - it never redraws borders
-            // or other rows.
+            // The signature page was appended once, at upload time (see
+            // WithNewBlankPage), so it's already the document's last page and
+            // stays that way - no page is ever added here. Table geometry is
+            // fixed too (every category's blank row and every cell border are
+            // already burned into currentPdf), so this only fills in the two
+            // cells for one row - it never redraws borders or other rows.
             var layout = GetLayout(page, SignatureCategoryExtensions.Sequence.Count);
             var font = new XFont(EmbeddedFontResolver.FamilyName, _options.FontSize, XFontStyle.Regular);
             var rowIndex = 1 + SignatureCategoryExtensions.Sequence.ToList().IndexOf(category);
@@ -65,6 +67,36 @@ public class PdfSigningService : IPdfSigningService
         }
 
         var page = document.Pages[document.PageCount - 1];
+        using (var gfx = XGraphics.FromPdfPage(page))
+        {
+            draw(gfx, page);
+        }
+
+        using var outputStream = new MemoryStream();
+        document.Save(outputStream);
+        return outputStream.ToArray();
+    }
+
+    /// <summary>
+    /// Appends a new blank page (matching the size of the document's current
+    /// last page) and draws on that, so the signature table never overlaps
+    /// the uploaded content - it always lives on its own page at the end.
+    /// </summary>
+    private static byte[] WithNewBlankPage(byte[] pdfBytes, Action<XGraphics, PdfPage> draw)
+    {
+        using var inputStream = new MemoryStream(pdfBytes);
+        using var document = PdfReader.Open(inputStream, PdfDocumentOpenMode.Modify);
+
+        if (document.PageCount == 0)
+        {
+            throw new InvalidOperationException("The PDF document has no pages to sign.");
+        }
+
+        var lastContentPage = document.Pages[document.PageCount - 1];
+        var page = document.AddPage();
+        page.Width = lastContentPage.Width;
+        page.Height = lastContentPage.Height;
+
         using (var gfx = XGraphics.FromPdfPage(page))
         {
             draw(gfx, page);
