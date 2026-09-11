@@ -3,16 +3,27 @@ using DocumentsApi.Core.Domain;
 namespace DocumentsApi.Core.Data.Entities;
 
 /// <summary>
-/// Audit record of one signing stage (Opracował/Sprawdził/Zatwierdził) applied
-/// to a <see cref="Document"/>.
+/// Audit record of one signing stage (Opracował/Sprawdził/Zatwierdził) for a
+/// document. There is no separate "document" record - a document's identity
+/// is its file name, and its state is whatever signatures are logged
+/// against that name. This is the only thing this API writes to the
+/// database when a document is signed.
 /// </summary>
 public class DocumentSignature
 {
     public int Id { get; set; }
 
-    public int DocumentId { get; set; }
+    /// <summary>
+    /// The file name without extension, following the
+    /// "&lt;RepositoryId&gt;#&lt;ProjectName&gt;#&lt;Version&gt;" convention.
+    /// </summary>
+    public string FileName { get; set; } = string.Empty;
 
-    public Document Document { get; set; } = null!;
+    public string RepositoryId { get; set; } = string.Empty;
+
+    public string ProjectName { get; set; } = string.Empty;
+
+    public string Version { get; set; } = string.Empty;
 
     public SignatureCategory Category { get; set; }
 

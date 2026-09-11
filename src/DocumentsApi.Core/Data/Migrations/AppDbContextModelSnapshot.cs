@@ -22,7 +22,7 @@ namespace DocumentsApi.Core.Data.Migrations
 
             MySqlModelBuilderExtensions.AutoIncrementColumns(modelBuilder);
 
-            modelBuilder.Entity("DocumentsApi.Core.Data.Entities.Document", b =>
+            modelBuilder.Entity("DocumentsApi.Core.Data.Entities.DocumentSignature", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
@@ -30,10 +30,10 @@ namespace DocumentsApi.Core.Data.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
-                    b.Property<DateTime>("CreatedAtUtc")
-                        .HasColumnType("datetime(6)");
+                    b.Property<int>("Category")
+                        .HasColumnType("int");
 
-                    b.Property<string>("CurrentHash")
+                    b.Property<string>("DocumentHash")
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("char(64)")
@@ -54,7 +54,10 @@ namespace DocumentsApi.Core.Data.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("varchar(100)");
 
-                    b.Property<string>("UploadedBy")
+                    b.Property<DateTime>("SignedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("SignedBy")
                         .IsRequired()
                         .HasMaxLength(255)
                         .HasColumnType("varchar(255)");
@@ -66,43 +69,7 @@ namespace DocumentsApi.Core.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("FileName")
-                        .IsUnique();
-
-                    b.ToTable("Documents", (string)null);
-                });
-
-            modelBuilder.Entity("DocumentsApi.Core.Data.Entities.DocumentSignature", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("Category")
-                        .HasColumnType("int");
-
-                    b.Property<string>("DocumentHash")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("char(64)")
-                        .IsFixedLength();
-
-                    b.Property<int>("DocumentId")
-                        .HasColumnType("int");
-
-                    b.Property<DateTime>("SignedAtUtc")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<string>("SignedBy")
-                        .IsRequired()
-                        .HasMaxLength(255)
-                        .HasColumnType("varchar(255)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("DocumentId", "Category")
+                    b.HasIndex("FileName", "Category")
                         .IsUnique();
 
                     b.ToTable("DocumentSignatures", (string)null);
@@ -121,10 +88,7 @@ namespace DocumentsApi.Core.Data.Migrations
                         .HasMaxLength(255)
                         .HasColumnType("varchar(255)");
 
-                    b.Property<int?>("AttemptedCategory")
-                        .HasColumnType("int");
-
-                    b.Property<int?>("DocumentId")
+                    b.Property<int>("AttemptedCategory")
                         .HasColumnType("int");
 
                     b.Property<string>("ErrorMessage")
@@ -143,22 +107,6 @@ namespace DocumentsApi.Core.Data.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("SigningFailures", (string)null);
-                });
-
-            modelBuilder.Entity("DocumentsApi.Core.Data.Entities.DocumentSignature", b =>
-                {
-                    b.HasOne("DocumentsApi.Core.Data.Entities.Document", "Document")
-                        .WithMany("Signatures")
-                        .HasForeignKey("DocumentId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Document");
-                });
-
-            modelBuilder.Entity("DocumentsApi.Core.Data.Entities.Document", b =>
-                {
-                    b.Navigation("Signatures");
                 });
 #pragma warning restore 612, 618
         }

@@ -4,13 +4,10 @@ public class VerifyDocumentResponse
 {
     public bool Found { get; set; }
 
-    public int? DocumentId { get; set; }
-
     public string? FileName { get; set; }
 
     /// <summary>
-    /// The signature stage this hash matched, or "Uploaded (not yet signed)"
-    /// when it matches a document's initial, blank-table state.
+    /// The signature stage this hash matched.
     /// </summary>
     public string? MatchedStage { get; set; }
 

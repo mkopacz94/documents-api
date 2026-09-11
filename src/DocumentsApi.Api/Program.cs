@@ -64,7 +64,7 @@ var connectionString = builder.Configuration.GetConnectionString("DocumentsDb")
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseMySql(connectionString, new MySqlServerVersion(new Version(8, 0, 34))));
 
-builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
+builder.Services.AddScoped<IDocumentSignatureRepository, DocumentSignatureRepository>();
 builder.Services.AddScoped<ISigningFailureLogger, SigningFailureLogger>();
 builder.Services.AddScoped<IPdfSigningService, PdfSigningService>();
 

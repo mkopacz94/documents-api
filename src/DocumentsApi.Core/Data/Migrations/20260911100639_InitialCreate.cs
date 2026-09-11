@@ -16,7 +16,7 @@ namespace DocumentsApi.Core.Data.Migrations
                 .Annotation("MySql:CharSet", "utf8mb4");
 
             migrationBuilder.CreateTable(
-                name: "Documents",
+                name: "DocumentSignatures",
                 columns: table => new
                 {
                     Id = table.Column<int>(type: "int", nullable: false)
@@ -29,15 +29,16 @@ namespace DocumentsApi.Core.Data.Migrations
                         .Annotation("MySql:CharSet", "utf8mb4"),
                     Version = table.Column<string>(type: "varchar(100)", maxLength: 100, nullable: false)
                         .Annotation("MySql:CharSet", "utf8mb4"),
-                    CreatedAtUtc = table.Column<DateTime>(type: "datetime(6)", nullable: false),
-                    UploadedBy = table.Column<string>(type: "varchar(255)", maxLength: 255, nullable: false)
+                    Category = table.Column<int>(type: "int", nullable: false),
+                    SignedBy = table.Column<string>(type: "varchar(255)", maxLength: 255, nullable: false)
                         .Annotation("MySql:CharSet", "utf8mb4"),
-                    CurrentHash = table.Column<string>(type: "char(64)", fixedLength: true, maxLength: 64, nullable: false)
+                    SignedAtUtc = table.Column<DateTime>(type: "datetime(6)", nullable: false),
+                    DocumentHash = table.Column<string>(type: "char(64)", fixedLength: true, maxLength: 64, nullable: false)
                         .Annotation("MySql:CharSet", "utf8mb4")
                 },
                 constraints: table =>
                 {
-                    table.PrimaryKey("PK_Documents", x => x.Id);
+                    table.PrimaryKey("PK_DocumentSignatures", x => x.Id);
                 })
                 .Annotation("MySql:CharSet", "utf8mb4");
 
@@ -47,10 +48,9 @@ namespace DocumentsApi.Core.Data.Migrations
                 {
                     Id = table.Column<int>(type: "int", nullable: false)
                         .Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
-                    DocumentId = table.Column<int>(type: "int", nullable: true),
                     FileName = table.Column<string>(type: "varchar(300)", maxLength: 300, nullable: false)
                         .Annotation("MySql:CharSet", "utf8mb4"),
-                    AttemptedCategory = table.Column<int>(type: "int", nullable: true),
+                    AttemptedCategory = table.Column<int>(type: "int", nullable: false),
                     AttemptedBy = table.Column<string>(type: "varchar(255)", maxLength: 255, nullable: false)
                         .Annotation("MySql:CharSet", "utf8mb4"),
                     OccurredAtUtc = table.Column<DateTime>(type: "datetime(6)", nullable: false),
@@ -63,42 +63,10 @@ namespace DocumentsApi.Core.Data.Migrations
                 })
                 .Annotation("MySql:CharSet", "utf8mb4");
 
-            migrationBuilder.CreateTable(
-                name: "DocumentSignatures",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "int", nullable: false)
-                        .Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
-                    DocumentId = table.Column<int>(type: "int", nullable: false),
-                    Category = table.Column<int>(type: "int", nullable: false),
-                    SignedBy = table.Column<string>(type: "varchar(255)", maxLength: 255, nullable: false)
-                        .Annotation("MySql:CharSet", "utf8mb4"),
-                    SignedAtUtc = table.Column<DateTime>(type: "datetime(6)", nullable: false),
-                    DocumentHash = table.Column<string>(type: "char(64)", fixedLength: true, maxLength: 64, nullable: false)
-                        .Annotation("MySql:CharSet", "utf8mb4")
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_DocumentSignatures", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_DocumentSignatures_Documents_DocumentId",
-                        column: x => x.DocumentId,
-                        principalTable: "Documents",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                })
-                .Annotation("MySql:CharSet", "utf8mb4");
-
             migrationBuilder.CreateIndex(
-                name: "IX_Documents_FileName",
-                table: "Documents",
-                column: "FileName",
-                unique: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_DocumentSignatures_DocumentId_Category",
+                name: "IX_DocumentSignatures_FileName_Category",
                 table: "DocumentSignatures",
-                columns: new[] { "DocumentId", "Category" },
+                columns: new[] { "FileName", "Category" },
                 unique: true);
         }
 
@@ -110,9 +78,6 @@ namespace DocumentsApi.Core.Data.Migrations
 
             migrationBuilder.DropTable(
                 name: "SigningFailures");
-
-            migrationBuilder.DropTable(
-                name: "Documents");
         }
     }
 }

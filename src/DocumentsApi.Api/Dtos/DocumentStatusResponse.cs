@@ -2,17 +2,15 @@ namespace DocumentsApi.Api.Dtos;
 
 public class DocumentStatusResponse
 {
-    public int Id { get; set; }
-
     public string FileName { get; set; } = string.Empty;
 
-    public string UploadedBy { get; set; } = string.Empty;
-
-    public DateTime CreatedAtUtc { get; set; }
-
-    public string CurrentHash { get; set; } = string.Empty;
-
     public List<SignatureStatusEntry> Signatures { get; set; } = new();
+
+    /// <summary>
+    /// Hash of the most recently signed stage, or null if nothing has been
+    /// signed for this file name yet.
+    /// </summary>
+    public string? CurrentHash { get; set; }
 
     public string? NextExpectedCategory { get; set; }
 

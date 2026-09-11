@@ -15,6 +15,18 @@ public class SignDocumentRequest
     public IFormFile File { get; set; } = null!;
 
     /// <summary>
+    /// The document's identity (the "&lt;RepositoryId&gt;#&lt;ProjectName&gt;#&lt;Version&gt;"
+    /// name, without extension) exactly as returned by upload in the
+    /// X-File-Name header. Deliberately a separate field rather than reusing
+    /// <see cref="File"/>'s own multipart file name: a browser round-trips
+    /// the PDF as an unnamed Blob (fetch().blob() carries no name at all), so
+    /// relying on that metadata for identity is fragile - this field is
+    /// explicit instead.
+    /// </summary>
+    [Required]
+    public string FileName { get; set; } = string.Empty;
+
+    /// <summary>
     /// Which of the three signature stages this request signs. The signer's
     /// identity comes from the authenticated caller, never from this body.
     /// </summary>
