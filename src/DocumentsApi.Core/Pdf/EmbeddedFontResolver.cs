@@ -9,10 +9,10 @@ namespace DocumentsApi.Core.Pdf;
 /// </summary>
 public sealed class EmbeddedFontResolver : IFontResolver
 {
-    public const string FamilyName = "Liberation Sans";
+    public const string FamilyName = "Lato";
 
-    private const string RegularFaceName = "LiberationSans#Regular";
-    private const string BoldFaceName = "LiberationSans#Bold";
+    private const string RegularFaceName = "Lato#Regular";
+    private const string BoldFaceName = "Lato#Bold";
 
     public string DefaultFontName => RegularFaceName;
 
@@ -20,8 +20,8 @@ public sealed class EmbeddedFontResolver : IFontResolver
     {
         var resourceName = faceName switch
         {
-            RegularFaceName => "DocumentsApi.Core.Resources.Fonts.LiberationSans-Regular.ttf",
-            BoldFaceName => "DocumentsApi.Core.Resources.Fonts.LiberationSans-Bold.ttf",
+            RegularFaceName => "DocumentsApi.Core.Resources.Fonts.Lato-Regular.ttf",
+            BoldFaceName => "DocumentsApi.Core.Resources.Fonts.Lato-Bold.ttf",
             _ => throw new ArgumentException($"Unknown font face: {faceName}", nameof(faceName)),
         };
 

@@ -7,9 +7,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Not a Web SDK project, but needs ASP.NET Core hosting/auth abstractions
-         (IWebHostEnvironment, AuthenticationHandler<T>, IFormFile) used by the
-         file store and the dev-only authentication handler. -->
+    <!-- Not a Web SDK project, but needs ASP.NET Core's AuthenticationHandler<T>
+         for the dev-only authentication handler. -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
@@ -26,8 +25,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Resources\Fonts\LiberationSans-Regular.ttf" />
-    <EmbeddedResource Include="Resources\Fonts\LiberationSans-Bold.ttf" />
+    <EmbeddedResource Include="Resources\Fonts\Lato-Regular.ttf" />
+    <EmbeddedResource Include="Resources\Fonts\Lato-Bold.ttf" />
   </ItemGroup>
 
 </Project>
