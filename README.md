@@ -137,27 +137,50 @@ Per the requirements, this is stage 1. **Not** implemented:
 
 ## Project layout
 
+Two projects: **Api** is the thin HTTP host (controllers, wire DTOs,
+composition root); **Core** holds everything else - domain, persistence, PDF
+rendering, file storage, and the dev auth fallback. Api references Core; Core
+has no dependency on Api.
+
 ```
-src/DocumentsApi.Api/
+src/DocumentsApi.Api/                    # host project (Microsoft.NET.Sdk.Web)
   Controllers/DocumentsController.cs     # upload / status / sign / download / verify
+  Dtos/                                  # request/response wire contracts
+  Program.cs                             # composition root: DI, auth, EF, migrations
+  appsettings*.json
+
+src/DocumentsApi.Core/                   # class library (Microsoft.NET.Sdk + FrameworkReference)
+  Domain/SignatureCategory.cs            # Opracowal/Sprawdzil/Zatwierdzil + required order
+  Data/AppDbContext.cs                   # EF Core DbContext (MySQL via Pomelo)
+  Data/Entities/                         # Document, DocumentSignature, SigningFailure
+  Data/Migrations/                       # EF Core migrations
   Services/PdfSigningService.cs          # renders the 3-row signature table
   Services/DocumentRepository.cs         # Document + DocumentSignature persistence
   Services/LocalDiskDocumentFileStore.cs # original + current PDF bytes on disk
   Services/SigningFailureLogger.cs       # audit log for failed sign attempts
-  Domain/SignatureCategory.cs            # Opracowal/Sprawdzil/Zatwierdzil + required order
   Auth/DevHeaderAuthenticationHandler.cs # Development-only auth fallback
-  Data/AppDbContext.cs                   # EF Core DbContext (MySQL via Pomelo)
-  Data/Migrations/                       # EF Core migrations
   Pdf/EmbeddedFontResolver.cs            # embedded-font PDF font resolver
   Options/                               # PdfSignature, DocumentStorage, Auth, SignaturePermissions
 ```
 
+Core isn't a Web SDK project, but a few of its types (`IWebHostEnvironment`,
+`AuthenticationHandler<T>`, `IFormFile`) come from ASP.NET Core, so its
+`.csproj` adds `<FrameworkReference Include="Microsoft.AspNetCore.App" />`
+rather than pulling in the full Web SDK.
+
 ## Managing migrations
 
+The `DbContext` lives in Core, but EF tooling needs a runnable startup
+project (Api) to load design-time services from - both projects reference
+`Microsoft.EntityFrameworkCore.Design` for this reason. Run commands from
+the repo root:
+
 ```bash
-cd src/DocumentsApi.Api
 dotnet tool install --global dotnet-ef   # first time only
-dotnet ef migrations add <Name> -o Data/Migrations
+dotnet ef migrations add <Name> \
+  --project src/DocumentsApi.Core/DocumentsApi.Core.csproj \
+  --startup-project src/DocumentsApi.Api/DocumentsApi.Api.csproj \
+  -o Data/Migrations
 ```
 
 ## Configuration reference

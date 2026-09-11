@@ -1,11 +1,11 @@
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
-using DocumentsApi.Api.Data.Entities;
-using DocumentsApi.Api.Domain;
+using DocumentsApi.Core.Data.Entities;
+using DocumentsApi.Core.Domain;
 using DocumentsApi.Api.Dtos;
-using DocumentsApi.Api.Options;
-using DocumentsApi.Api.Services;
+using DocumentsApi.Core.Options;
+using DocumentsApi.Core.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;

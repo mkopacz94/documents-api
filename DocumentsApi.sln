@@ -7,6 +7,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{2B700FD5-816
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DocumentsApi.Api", "src\DocumentsApi.Api\DocumentsApi.Api.csproj", "{7D54C839-EBC3-4F29-BF93-14D0FBA8F292}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DocumentsApi.Core", "src\DocumentsApi.Core\DocumentsApi.Core.csproj", "{92AF842D-B207-483E-887A-567A2CC4DBA5}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -20,8 +22,13 @@ Global
 		{7D54C839-EBC3-4F29-BF93-14D0FBA8F292}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7D54C839-EBC3-4F29-BF93-14D0FBA8F292}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{7D54C839-EBC3-4F29-BF93-14D0FBA8F292}.Release|Any CPU.Build.0 = Release|Any CPU
+		{92AF842D-B207-483E-887A-567A2CC4DBA5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{92AF842D-B207-483E-887A-567A2CC4DBA5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{92AF842D-B207-483E-887A-567A2CC4DBA5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{92AF842D-B207-483E-887A-567A2CC4DBA5}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{7D54C839-EBC3-4F29-BF93-14D0FBA8F292} = {2B700FD5-816A-4DCA-93C1-2A7E26D99359}
+		{92AF842D-B207-483E-887A-567A2CC4DBA5} = {2B700FD5-816A-4DCA-93C1-2A7E26D99359}
 	EndGlobalSection
 EndGlobal

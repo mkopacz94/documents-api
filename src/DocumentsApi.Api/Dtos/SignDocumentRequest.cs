@@ -1,5 +1,5 @@
 using System.ComponentModel.DataAnnotations;
-using DocumentsApi.Api.Domain;
+using DocumentsApi.Core.Domain;
 
 namespace DocumentsApi.Api.Dtos;
 

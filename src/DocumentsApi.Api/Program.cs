@@ -1,9 +1,9 @@
 using System.Text.Json.Serialization;
-using DocumentsApi.Api.Auth;
-using DocumentsApi.Api.Data;
-using DocumentsApi.Api.Options;
-using DocumentsApi.Api.Pdf;
-using DocumentsApi.Api.Services;
+using DocumentsApi.Core.Auth;
+using DocumentsApi.Core.Data;
+using DocumentsApi.Core.Options;
+using DocumentsApi.Core.Pdf;
+using DocumentsApi.Core.Services;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
