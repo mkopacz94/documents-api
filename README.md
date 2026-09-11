@@ -63,6 +63,42 @@ and is responsible for resubmitting them at the next signing stage.
 4. `POST /api/documents/verify` - hash-verification tool: upload a PDF, get
    back whether it matches a signing event this API has logged.
 
+### Error responses
+
+Every non-2xx response is a standard `ProblemDetails` (RFC 7807) body with
+two extra fields: a stable `errorCode` for the frontend to map to a
+localized message, and (where relevant) an `errorData` object carrying the
+raw values needed to build that message - never embedded in the English
+`detail` text, since word order and pluralization differ per language.
+
+```json
+{
+  "status": 409,
+  "title": "OUT_OF_ORDER_SIGNATURE",
+  "detail": "Signatures must be applied in order. The next expected category for '729#VIPD2#v1.00.16' is 'Sprawdzil'.",
+  "errorCode": "OUT_OF_ORDER_SIGNATURE",
+  "errorData": { "fileName": "729#VIPD2#v1.00.16", "nextExpectedCategory": "Sprawdzil" }
+}
+```
+
+Treat `detail` as a developer-facing fallback (logs, Swagger, debugging) -
+`errorCode` is what a localized frontend should actually key off. Codes in
+use: `EMPTY_FILE`, `FILE_TOO_LARGE` (`errorData.maxSizeBytes`),
+`UNSUPPORTED_FILE_TYPE`, `INVALID_FILE_NAME`, `FILE_NAME_REQUIRED`,
+`FILE_PROCESSING_FAILED`, `ALREADY_SIGNED` (`errorData.fileName`,
+`errorData.category`), `OUT_OF_ORDER_SIGNATURE` (`errorData.fileName`,
+`errorData.nextExpectedCategory`), `ROLE_NOT_AUTHORIZED`
+(`errorData.category`, `errorData.requiredRole`), `STALE_DOCUMENT_STATE`
+(`errorData.fileName`), `SIGNING_FAILED`. Defined in
+`src/DocumentsApi.Api/Errors/ErrorCodes.cs`; built via the
+`ControllerBase.Error(...)` extension in `Errors/ApiErrorExtensions.cs`, so
+the shape is the same one ASP.NET Core's own automatic model-validation
+errors already use.
+
+A bare `401` (no token, or an invalid one) doesn't go through this - it's
+handled by the authentication middleware itself, before any controller code
+runs, so it currently has no body at all.
+
 ### Why `fileName` is a separate form field
 
 The obvious design would derive identity from the uploaded file's own
@@ -187,6 +223,7 @@ dependency on Api.
 src/DocumentsApi.Api/                    # host project (Microsoft.NET.Sdk.Web)
   Controllers/DocumentsController.cs     # upload / status / sign / verify
   Dtos/                                  # request/response wire contracts
+  Errors/                                # ErrorCodes + the ProblemDetails-building helper
   Program.cs                             # composition root: DI, auth, EF, migrations
   appsettings*.json
 

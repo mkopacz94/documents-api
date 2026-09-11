@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using DocumentsApi.Api.Dtos;
+using DocumentsApi.Api.Errors;
 using DocumentsApi.Core.Data.Entities;
 using DocumentsApi.Core.Domain;
 using DocumentsApi.Core.Options;
@@ -65,25 +66,31 @@ public class DocumentsController : ControllerBase
     {
         if (request.File.Length == 0)
         {
-            return BadRequest("The uploaded file is empty.");
+            return this.Error(StatusCodes.Status400BadRequest, ErrorCodes.EmptyFile, "The uploaded file is empty.");
         }
 
         if (request.File.Length > _uploadOptions.MaxFileSizeBytes)
         {
-            return BadRequest($"The uploaded file exceeds the maximum allowed size of {_uploadOptions.MaxFileSizeBytes / (1024 * 1024)} MB.");
+            return this.Error(
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.FileTooLarge,
+                $"The uploaded file exceeds the maximum allowed size of {_uploadOptions.MaxFileSizeBytes / (1024 * 1024)} MB.",
+                new { maxSizeBytes = _uploadOptions.MaxFileSizeBytes });
         }
 
         var isPdf = string.Equals(request.File.ContentType, "application/pdf", StringComparison.OrdinalIgnoreCase)
             || string.Equals(Path.GetExtension(request.File.FileName), ".pdf", StringComparison.OrdinalIgnoreCase);
         if (!isPdf)
         {
-            return BadRequest("Only PDF files are supported.");
+            return this.Error(StatusCodes.Status400BadRequest, ErrorCodes.UnsupportedFileType, "Only PDF files are supported.");
         }
 
         var baseFileName = Path.GetFileNameWithoutExtension(request.File.FileName);
         if (!FileNamePattern.IsMatch(baseFileName))
         {
-            return BadRequest(
+            return this.Error(
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.InvalidFileName,
                 "File name must follow the '<RepositoryId>#<ProjectName>#<Version>.pdf' convention, " +
                 "e.g. '729#VIPD2#v1.00.16.pdf'.");
         }
@@ -107,7 +114,7 @@ public class DocumentsController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to prepare signature table for {FileName}", baseFileName);
-            return BadRequest("The uploaded file could not be processed as a PDF.");
+            return this.Error(StatusCodes.Status400BadRequest, ErrorCodes.FileProcessingFailed, "The uploaded file could not be processed as a PDF.");
         }
 
         Response.Headers["X-File-Name"] = baseFileName;
@@ -128,7 +135,7 @@ public class DocumentsController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(fileName))
         {
-            return BadRequest("fileName is required.");
+            return this.Error(StatusCodes.Status400BadRequest, ErrorCodes.FileNameRequired, "fileName is required.");
         }
 
         var signatures = await _signatureRepository.GetByFileNameAsync(fileName, cancellationToken);
@@ -154,14 +161,16 @@ public class DocumentsController : ControllerBase
     {
         if (request.File.Length == 0)
         {
-            return BadRequest("The uploaded file is empty.");
+            return this.Error(StatusCodes.Status400BadRequest, ErrorCodes.EmptyFile, "The uploaded file is empty.");
         }
 
         var baseFileName = request.FileName;
         var match = FileNamePattern.Match(baseFileName);
         if (!match.Success)
         {
-            return BadRequest(
+            return this.Error(
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.InvalidFileName,
                 "fileName must follow the '<RepositoryId>#<ProjectName>#<Version>' convention, " +
                 "e.g. '729#VIPD2#v1.00.16' - use the value from the X-File-Name header returned by upload.");
         }
@@ -170,20 +179,32 @@ public class DocumentsController : ControllerBase
 
         if (existing.Any(s => s.Category == request.Category))
         {
-            return Conflict($"'{baseFileName}' has already been signed for category '{request.Category}'.");
+            return this.Error(
+                StatusCodes.Status409Conflict,
+                ErrorCodes.AlreadySigned,
+                $"'{baseFileName}' has already been signed for category '{request.Category}'.",
+                new { fileName = baseFileName, category = request.Category.ToString() });
         }
 
         var sequence = SignatureCategoryExtensions.Sequence;
         var nextExpected = sequence.First(c => existing.All(s => s.Category != c));
         if (request.Category != nextExpected)
         {
-            return Conflict($"Signatures must be applied in order. The next expected category for '{baseFileName}' is '{nextExpected}'.");
+            return this.Error(
+                StatusCodes.Status409Conflict,
+                ErrorCodes.OutOfOrderSignature,
+                $"Signatures must be applied in order. The next expected category for '{baseFileName}' is '{nextExpected}'.",
+                new { fileName = baseFileName, nextExpectedCategory = nextExpected.ToString() });
         }
 
         var requiredRole = _permissionOptions.RoleFor(request.Category);
         if (!User.IsInRole(requiredRole))
         {
-            return Forbid();
+            return this.Error(
+                StatusCodes.Status403Forbidden,
+                ErrorCodes.RoleNotAuthorized,
+                $"You don't have the '{requiredRole}' role required to sign as '{request.Category}'.",
+                new { category = request.Category.ToString(), requiredRole });
         }
 
         byte[] currentBytes;
@@ -204,9 +225,12 @@ public class DocumentsController : ControllerBase
             var uploadedHash = Convert.ToHexString(SHA256.HashData(currentBytes));
             if (!string.Equals(uploadedHash, preceding.DocumentHash, StringComparison.OrdinalIgnoreCase))
             {
-                return Conflict(
+                return this.Error(
+                    StatusCodes.Status409Conflict,
+                    ErrorCodes.StaleDocumentState,
                     "The uploaded file doesn't match this document's last known state. " +
-                    "Re-fetch the current version (GET /api/documents/status) before signing.");
+                    "Re-fetch the current version (GET /api/documents/status) before signing.",
+                    new { fileName = baseFileName });
             }
         }
 
@@ -229,7 +253,7 @@ public class DocumentsController : ControllerBase
                 OccurredAtUtc = DateTime.UtcNow,
                 ErrorMessage = ex.Message,
             }, cancellationToken);
-            return StatusCode(StatusCodes.Status500InternalServerError, "The document could not be signed due to an internal processing error.");
+            return this.Error(StatusCodes.Status500InternalServerError, ErrorCodes.SigningFailed, "The document could not be signed due to an internal processing error.");
         }
 
         var documentHash = Convert.ToHexString(SHA256.HashData(renderedBytes));
@@ -271,7 +295,7 @@ public class DocumentsController : ControllerBase
     {
         if (request.File.Length == 0)
         {
-            return BadRequest("The uploaded file is empty.");
+            return this.Error(StatusCodes.Status400BadRequest, ErrorCodes.EmptyFile, "The uploaded file is empty.");
         }
 
         byte[] bytes;
