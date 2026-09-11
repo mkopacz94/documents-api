@@ -8,6 +8,14 @@ of a signature table (name + UTC timestamp) onto the PDF, and every
 successful signing is logged to MySQL via EF Core together with a hash of
 the resulting document.
 
+**This API keeps no copy of the PDF itself.** Only metadata and hashes are
+persisted (filename, uploader, signing history, per-stage hashes). Upload
+and sign both hand the current PDF bytes back to the caller - the frontend
+displays them and is responsible for resubmitting them at the next signing
+stage. This is the first-version behavior: nothing is written to disk, and
+there's no download-by-id endpoint, because there's nothing server-side to
+download.
+
 ## Workflow
 
 1. `POST /api/documents` - upload a new document. Rejected if:
@@ -18,26 +26,36 @@ the resulting document.
      this is the versioning/no-duplicate-names requirement)
 
    On success, a blank three-row signature table is stamped onto the last
-   page and the document is stored, unsigned.
+   page and the **PDF bytes are returned in the response body** (no
+   `Content-Disposition`, so a browser renders it inline) for the frontend
+   to display. The new document's id comes back in the `X-Document-Id`
+   header - the frontend needs it for every later call.
 
 2. `GET /api/documents/{id}` - current status: which categories are signed,
-   by whom, and which category is expected next. Backs the "view with
-   signing capability" screen (the frontend renders its own confirmation
-   dialog before calling sign).
+   by whom, and which category is expected next. Pure metadata from the
+   database; backs the "view with signing capability" screen (the frontend
+   renders its own confirmation dialog before calling sign).
 
-3. `POST /api/documents/{id}/sign` - signs the document for one category
-   (`{"category":"Opracowal"}` / `Sprawdzil` / `Zatwierdzil`). Rejected if:
+3. `POST /api/documents/{id}/sign` - signs the document for one category.
+   `multipart/form-data` with two fields:
+   - `file` - the PDF **exactly as the caller currently holds it** (what
+     upload or the previous sign call returned)
+   - `category` - `Opracowal` / `Sprawdzil` / `Zatwierdzil`
+
+   The uploaded file is hashed and compared against the document's last
+   known hash before anything is stamped - a stale or tampered copy is
+   rejected (409) rather than silently signed over. Also rejected if:
    - that category is already signed
    - it's signed out of order (categories must be applied Opracował → Sprawdził → Zatwierdził)
    - the caller doesn't hold the role mapped to that category (403)
 
    The signer's identity is taken from the authenticated caller's claims,
-   never from the request body.
+   never from the request body. On success, the updated PDF is returned as
+   an attachment (`Content-Disposition: attachment`) for the user to
+   download, with `X-Fully-Signed` and (if more stages remain)
+   `X-Next-Expected-Category` headers.
 
-4. `GET /api/documents/{id}/file` - downloads the document in its current
-   state.
-
-5. `POST /api/documents/verify` - hash-verification tool: upload a PDF, get
+4. `POST /api/documents/verify` - hash-verification tool: upload a PDF, get
    back whether it matches a document/stage this API produced (comparing
    against the hashes recorded in the database).
 
@@ -105,46 +123,50 @@ Migrations apply automatically on startup. Swagger UI is at `/swagger` in Develo
 ### 3. Try it (dev header auth)
 
 ```bash
-# Upload
-curl -X POST http://localhost:5203/api/documents \
+# Upload - the response body IS the PDF (for display); the id comes back in a header
+curl -D - -o current.pdf -X POST http://localhost:5203/api/documents \
   -H "X-Dev-User: alice" \
   -F "file=@729#VIPD2#v1.00.16.pdf;type=application/pdf"
-# => {"id":1, ...}
+# => X-Document-Id: 1   (and current.pdf is the file to show the user)
 
-# Sign as Opracował
-curl -X POST http://localhost:5203/api/documents/1/sign \
+# Sign as Opracował - forward the exact bytes just received
+curl -o current.pdf -X POST http://localhost:5203/api/documents/1/sign \
   -H "X-Dev-User: alice" -H "X-Dev-Roles: DocumentSigner.Opracowal" \
-  -H "Content-Type: application/json" -d '{"category":"Opracowal"}'
+  -F "category=Opracowal" -F "file=@current.pdf;type=application/pdf"
 
-# ... Sprawdzil by another user, then Zatwierdzil ...
+# Sign as Sprawdził - forward what the previous call just returned
+curl -o current.pdf -X POST http://localhost:5203/api/documents/1/sign \
+  -H "X-Dev-User: bob" -H "X-Dev-Roles: DocumentSigner.Sprawdzil" \
+  -F "category=Sprawdzil" -F "file=@current.pdf;type=application/pdf"
 
-# Download current state
-curl http://localhost:5203/api/documents/1/file -H "X-Dev-User: alice" -o signed.pdf
+# ... and so on for Zatwierdzil - current.pdf ends up fully signed
 
 # Verify a PDF against the database
 curl -X POST http://localhost:5203/api/documents/verify \
-  -H "X-Dev-User: alice" -F "file=@signed.pdf;type=application/pdf"
+  -H "X-Dev-User: alice" -F "file=@current.pdf;type=application/pdf"
 ```
 
 ## What's deliberately not implemented yet
 
 Per the requirements, this is stage 1. **Not** implemented:
 
-- Copying the signed document into a category-specific folder and exposing
-  a persistent download portal for the signer - the current
-  `IDocumentFileStore`/`LocalDiskDocumentFileStore` is a placeholder
-  abstraction so this can be swapped in without touching the controller.
+- Persisting the document server-side, copying it into a category-specific
+  folder, and exposing a download portal for the signer - stage 1 is
+  fully stateless on the file itself (see above); only metadata and hashes
+  are stored. Reintroducing storage later (for stage 2) means adding a file
+  store service and wiring it into `DocumentsController`, without changing
+  the DB schema.
 
 ## Project layout
 
 Two projects: **Api** is the thin HTTP host (controllers, wire DTOs,
 composition root); **Core** holds everything else - domain, persistence, PDF
-rendering, file storage, and the dev auth fallback. Api references Core; Core
-has no dependency on Api.
+rendering, and the dev auth fallback. Api references Core; Core has no
+dependency on Api.
 
 ```
 src/DocumentsApi.Api/                    # host project (Microsoft.NET.Sdk.Web)
-  Controllers/DocumentsController.cs     # upload / status / sign / download / verify
+  Controllers/DocumentsController.cs     # upload / status / sign / verify
   Dtos/                                  # request/response wire contracts
   Program.cs                             # composition root: DI, auth, EF, migrations
   appsettings*.json
@@ -154,19 +176,35 @@ src/DocumentsApi.Core/                   # class library (Microsoft.NET.Sdk + Fr
   Data/AppDbContext.cs                   # EF Core DbContext (MySQL via Pomelo)
   Data/Entities/                         # Document, DocumentSignature, SigningFailure
   Data/Migrations/                       # EF Core migrations
-  Services/PdfSigningService.cs          # renders the 3-row signature table
+  Services/PdfSigningService.cs          # renders the blank table / fills one row
   Services/DocumentRepository.cs         # Document + DocumentSignature persistence
-  Services/LocalDiskDocumentFileStore.cs # original + current PDF bytes on disk
   Services/SigningFailureLogger.cs       # audit log for failed sign attempts
   Auth/DevHeaderAuthenticationHandler.cs # Development-only auth fallback
   Pdf/EmbeddedFontResolver.cs            # embedded-font PDF font resolver
-  Options/                               # PdfSignature, DocumentStorage, Auth, SignaturePermissions
+  Options/                               # PdfSignature, DocumentUpload, Auth, SignaturePermissions
 ```
 
-Core isn't a Web SDK project, but a few of its types (`IWebHostEnvironment`,
-`AuthenticationHandler<T>`, `IFormFile`) come from ASP.NET Core, so its
-`.csproj` adds `<FrameworkReference Include="Microsoft.AspNetCore.App" />`
-rather than pulling in the full Web SDK.
+Core isn't a Web SDK project, but a few of its types (`AuthenticationHandler<T>`,
+`IFormFile`) come from ASP.NET Core, so its `.csproj` adds
+`<FrameworkReference Include="Microsoft.AspNetCore.App" />` rather than
+pulling in the full Web SDK.
+
+### How signing works without stored files
+
+`PdfSigningService` has two entry points:
+- `RenderSignatureTable` draws the full blank table (all three category
+  labels, empty signer/date cells) onto the freshly uploaded PDF. Used once,
+  at upload time.
+- `FillSignatureRow` draws just one row's signer/date cells, at a position
+  computed from the same fixed layout (margins, row height, column widths)
+  used to draw the table in the first place. It's given whatever PDF bytes
+  the caller currently holds and only touches that one row - it never
+  redraws borders or other rows, so there's no original copy to fall back
+  to and no risk of duplicating table artwork.
+
+Table geometry is fully determined by configuration and the fixed
+three-category list, so both methods always agree on where a given row is,
+without needing to share any per-document state.
 
 ## Managing migrations
 
@@ -191,8 +229,7 @@ dotnet ef migrations add <Name> \
 |                       | `RowHeight`       | Row height (points)                                    | `18`    |
 |                       | `MarginLeft/Right`| Table left/right margins (points)                      | `40`    |
 |                       | `MarginBottom`    | Distance from page bottom (points)                     | `30`    |
-| `DocumentStorage`     | `MaxFileSizeBytes`| Upload size limit                                      | `25 MB` |
-|                       | `BasePath`        | Where original/current PDFs are stored                | `App_Data/documents` |
+| `DocumentUpload`      | `MaxFileSizeBytes`| Upload size limit                                      | `25 MB` |
 | `Auth`                | `Authority`       | External identity provider issuer URL                  | *(empty - dev fallback)* |
 |                       | `Audience`        | Expected JWT audience                                  | *(empty)* |
 | `SignaturePermissions`| `Opracowal` etc.  | Role/group name per signature category                | `DocumentSigner.*` |

@@ -22,7 +22,7 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 builder.Services.Configure<PdfSignatureOptions>(builder.Configuration.GetSection(PdfSignatureOptions.SectionName));
-builder.Services.Configure<DocumentStorageOptions>(builder.Configuration.GetSection(DocumentStorageOptions.SectionName));
+builder.Services.Configure<DocumentUploadOptions>(builder.Configuration.GetSection(DocumentUploadOptions.SectionName));
 builder.Services.Configure<SignaturePermissionOptions>(builder.Configuration.GetSection(SignaturePermissionOptions.SectionName));
 
 var authOptions = builder.Configuration.GetSection(AuthOptions.SectionName).Get<AuthOptions>() ?? new AuthOptions();
@@ -67,7 +67,6 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
 builder.Services.AddScoped<ISigningFailureLogger, SigningFailureLogger>();
 builder.Services.AddScoped<IPdfSigningService, PdfSigningService>();
-builder.Services.AddSingleton<IDocumentFileStore, LocalDiskDocumentFileStore>();
 
 var app = builder.Build();
 

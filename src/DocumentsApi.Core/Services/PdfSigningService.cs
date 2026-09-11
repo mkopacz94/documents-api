@@ -19,7 +19,44 @@ public class PdfSigningService : IPdfSigningService
 
     public byte[] RenderSignatureTable(byte[] originalPdf, IReadOnlyList<SignatureRowInfo> rows)
     {
-        using var inputStream = new MemoryStream(originalPdf);
+        return WithLastPage(originalPdf, (gfx, page) =>
+        {
+            var layout = GetLayout(page, rows.Count);
+            var headerFont = new XFont(EmbeddedFontResolver.FamilyName, _options.FontSize, XFontStyle.Bold);
+            var cellFont = new XFont(EmbeddedFontResolver.FamilyName, _options.FontSize, XFontStyle.Regular);
+
+            DrawRow(gfx, layout, 0, headerFont, layout.Columns.Select(c => c.Title).ToArray());
+
+            for (var i = 0; i < rows.Count; i++)
+            {
+                var row = rows[i];
+                var signedAtText = row.SignedAtUtc is { } signedAt ? $"{signedAt:yyyy-MM-dd HH:mm} UTC" : string.Empty;
+                DrawRow(gfx, layout, i + 1, cellFont, new[] { row.Category.DisplayName(), row.SignedBy ?? string.Empty, signedAtText });
+            }
+        });
+    }
+
+    public byte[] FillSignatureRow(byte[] currentPdf, SignatureCategory category, string signedBy, DateTime signedAtUtc)
+    {
+        return WithLastPage(currentPdf, (gfx, page) =>
+        {
+            // Table geometry is fixed at upload time (every category's blank row
+            // and every cell border are already burned into currentPdf), so this
+            // only fills in the two cells for one row - it never redraws borders
+            // or other rows.
+            var layout = GetLayout(page, SignatureCategoryExtensions.Sequence.Count);
+            var font = new XFont(EmbeddedFontResolver.FamilyName, _options.FontSize, XFontStyle.Regular);
+            var rowIndex = 1 + SignatureCategoryExtensions.Sequence.ToList().IndexOf(category);
+            var signedAtText = $"{signedAtUtc:yyyy-MM-dd HH:mm} UTC";
+
+            DrawCellText(gfx, layout, rowIndex, columnIndex: 1, font, signedBy);
+            DrawCellText(gfx, layout, rowIndex, columnIndex: 2, font, signedAtText);
+        });
+    }
+
+    private static byte[] WithLastPage(byte[] pdfBytes, Action<XGraphics, PdfPage> draw)
+    {
+        using var inputStream = new MemoryStream(pdfBytes);
         using var document = PdfReader.Open(inputStream, PdfDocumentOpenMode.Modify);
 
         if (document.PageCount == 0)
@@ -28,10 +65,9 @@ public class PdfSigningService : IPdfSigningService
         }
 
         var page = document.Pages[document.PageCount - 1];
-
         using (var gfx = XGraphics.FromPdfPage(page))
         {
-            DrawTable(gfx, page, rows);
+            draw(gfx, page);
         }
 
         using var outputStream = new MemoryStream();
@@ -39,11 +75,8 @@ public class PdfSigningService : IPdfSigningService
         return outputStream.ToArray();
     }
 
-    private void DrawTable(XGraphics gfx, PdfPage page, IReadOnlyList<SignatureRowInfo> rows)
+    private (double Left, double Top, (string Title, double Width)[] Columns) GetLayout(PdfPage page, int signatureRowCount)
     {
-        var headerFont = new XFont(EmbeddedFontResolver.FamilyName, _options.FontSize, XFontStyle.Bold);
-        var cellFont = new XFont(EmbeddedFontResolver.FamilyName, _options.FontSize, XFontStyle.Regular);
-
         var tableWidth = page.Width.Point - _options.MarginLeft - _options.MarginRight;
         var columns = new (string Title, double Width)[]
         {
@@ -52,44 +85,44 @@ public class PdfSigningService : IPdfSigningService
             ("Data", tableWidth * 0.3),
         };
 
-        var totalRows = rows.Count + 1; // header + one row per signature category
+        var totalRows = signatureRowCount + 1; // header + one row per signature category
         var tableHeight = _options.RowHeight * totalRows;
         var top = page.Height.Point - _options.MarginBottom - tableHeight;
-        var left = _options.MarginLeft;
 
-        var y = top;
-        DrawRow(gfx, columns, left, y, _options.RowHeight, headerFont,
-            columns.Select(c => c.Title).ToArray());
-
-        foreach (var row in rows)
-        {
-            y += _options.RowHeight;
-            var signedAtText = row.SignedAtUtc is { } signedAt
-                ? $"{signedAt:yyyy-MM-dd HH:mm} UTC"
-                : string.Empty;
-            DrawRow(gfx, columns, left, y, _options.RowHeight, cellFont,
-                new[] { row.Category.DisplayName(), row.SignedBy ?? string.Empty, signedAtText });
-        }
+        return (_options.MarginLeft, top, columns);
     }
 
-    private static void DrawRow(
+    private void DrawRow(
         XGraphics gfx,
-        (string Title, double Width)[] columns,
-        double left,
-        double y,
-        double rowHeight,
+        (double Left, double Top, (string Title, double Width)[] Columns) layout,
+        int rowIndex,
         XFont font,
         IReadOnlyList<string> cellValues)
     {
-        var x = left;
-        for (var i = 0; i < columns.Length; i++)
+        var y = layout.Top + _options.RowHeight * rowIndex;
+        var x = layout.Left;
+        for (var i = 0; i < layout.Columns.Length; i++)
         {
-            var width = columns[i].Width;
-            var rect = new XRect(x, y, width, rowHeight);
-            gfx.DrawRectangle(XPens.Black, rect);
+            var width = layout.Columns[i].Width;
+            gfx.DrawRectangle(XPens.Black, new XRect(x, y, width, _options.RowHeight));
             gfx.DrawString(cellValues[i], font, XBrushes.Black,
-                new XRect(x + 4, y, width - 8, rowHeight), XStringFormats.CenterLeft);
+                new XRect(x + 4, y, width - 8, _options.RowHeight), XStringFormats.CenterLeft);
             x += width;
         }
+    }
+
+    private void DrawCellText(
+        XGraphics gfx,
+        (double Left, double Top, (string Title, double Width)[] Columns) layout,
+        int rowIndex,
+        int columnIndex,
+        XFont font,
+        string text)
+    {
+        var y = layout.Top + _options.RowHeight * rowIndex;
+        var x = layout.Left + layout.Columns.Take(columnIndex).Sum(c => c.Width);
+        var width = layout.Columns[columnIndex].Width;
+        gfx.DrawString(text, font, XBrushes.Black,
+            new XRect(x + 4, y, width - 8, _options.RowHeight), XStringFormats.CenterLeft);
     }
 }

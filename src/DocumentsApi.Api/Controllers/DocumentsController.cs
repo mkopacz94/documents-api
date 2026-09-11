@@ -1,9 +1,9 @@
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
+using DocumentsApi.Api.Dtos;
 using DocumentsApi.Core.Data.Entities;
 using DocumentsApi.Core.Domain;
-using DocumentsApi.Api.Dtos;
 using DocumentsApi.Core.Options;
 using DocumentsApi.Core.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -12,6 +12,13 @@ using Microsoft.Extensions.Options;
 
 namespace DocumentsApi.Api.Controllers;
 
+/// <summary>
+/// This API keeps no copy of the PDF itself - only metadata and hashes are
+/// persisted (via <see cref="IDocumentRepository"/>). Upload and sign both
+/// return the current PDF bytes to the caller, who is responsible for
+/// holding onto them (for display, and to resubmit at the next signing
+/// stage). Only the signing history and hash chain live server-side.
+/// </summary>
 [ApiController]
 [Route("api/documents")]
 [Authorize]
@@ -24,26 +31,23 @@ public class DocumentsController : ControllerBase
 
     private readonly IPdfSigningService _pdfSigningService;
     private readonly IDocumentRepository _documentRepository;
-    private readonly IDocumentFileStore _fileStore;
     private readonly ISigningFailureLogger _failureLogger;
-    private readonly DocumentStorageOptions _storageOptions;
+    private readonly DocumentUploadOptions _uploadOptions;
     private readonly SignaturePermissionOptions _permissionOptions;
     private readonly ILogger<DocumentsController> _logger;
 
     public DocumentsController(
         IPdfSigningService pdfSigningService,
         IDocumentRepository documentRepository,
-        IDocumentFileStore fileStore,
         ISigningFailureLogger failureLogger,
-        IOptions<DocumentStorageOptions> storageOptions,
+        IOptions<DocumentUploadOptions> uploadOptions,
         IOptions<SignaturePermissionOptions> permissionOptions,
         ILogger<DocumentsController> logger)
     {
         _pdfSigningService = pdfSigningService;
         _documentRepository = documentRepository;
-        _fileStore = fileStore;
         _failureLogger = failureLogger;
-        _storageOptions = storageOptions.Value;
+        _uploadOptions = uploadOptions.Value;
         _permissionOptions = permissionOptions.Value;
         _logger = logger;
     }
@@ -52,7 +56,8 @@ public class DocumentsController : ControllerBase
     /// Uploads a new document. Validates the file name convention
     /// ("&lt;RepositoryId&gt;#&lt;ProjectName&gt;#&lt;Version&gt;.pdf"), rejects an exact
     /// repeat upload (versioning must be bumped instead), stamps a blank
-    /// three-row signature table onto it, and stores the original bytes.
+    /// three-row signature table onto it, and returns the result for the
+    /// frontend to display - it is not saved anywhere server-side.
     /// </summary>
     [HttpPost]
     [RequestSizeLimit(RequestSizeLimitCeilingBytes)]
@@ -64,9 +69,9 @@ public class DocumentsController : ControllerBase
             return BadRequest("The uploaded file is empty.");
         }
 
-        if (request.File.Length > _storageOptions.MaxFileSizeBytes)
+        if (request.File.Length > _uploadOptions.MaxFileSizeBytes)
         {
-            return BadRequest($"The uploaded file exceeds the maximum allowed size of {_storageOptions.MaxFileSizeBytes / (1024 * 1024)} MB.");
+            return BadRequest($"The uploaded file exceeds the maximum allowed size of {_uploadOptions.MaxFileSizeBytes / (1024 * 1024)} MB.");
         }
 
         var isPdf = string.Equals(request.File.ContentType, "application/pdf", StringComparison.OrdinalIgnoreCase)
@@ -129,17 +134,20 @@ public class DocumentsController : ControllerBase
             UploadedBy = CurrentUserName,
             CurrentHash = Convert.ToHexString(SHA256.HashData(renderedBytes)),
         };
-
         await _documentRepository.AddAsync(document, cancellationToken);
-        await _fileStore.SaveOriginalAsync(document.Id, sourceBytes, cancellationToken);
-        await _fileStore.SaveCurrentAsync(document.Id, renderedBytes, cancellationToken);
 
-        return CreatedAtAction(nameof(GetStatus), new { id = document.Id }, ToStatusResponse(document));
+        Response.Headers["X-Document-Id"] = document.Id.ToString();
+        Response.Headers["X-Next-Expected-Category"] = SignatureCategoryExtensions.Sequence[0].ToString();
+
+        // No Content-Disposition/file name here: this response is meant to be
+        // displayed to the user (e.g. an embedded PDF viewer), not downloaded.
+        return File(renderedBytes, "application/pdf");
     }
 
     /// <summary>
     /// Current signing status: which categories are signed, by whom, and
-    /// what's expected next. Backs the "view with signing capability" screen.
+    /// what's expected next. Purely metadata from the database - the PDF
+    /// itself isn't available here since this API doesn't store it.
     /// </summary>
     [HttpGet("{id:int}")]
     public async Task<IActionResult> GetStatus(int id, CancellationToken cancellationToken)
@@ -149,11 +157,21 @@ public class DocumentsController : ControllerBase
     }
 
     /// <summary>
-    /// Downloads the document in its current state (signature table reflects
-    /// whichever categories have been signed so far).
+    /// Signs the document for one category. The caller must submit the PDF
+    /// exactly as they currently hold it (from the upload response or a
+    /// previous sign response) - it's hashed and checked against the last
+    /// known state before anything is stamped, so a stale or tampered copy
+    /// is rejected rather than silently signed. Categories must be signed in
+    /// order (Opracował, then Sprawdził, then Zatwierdził) and the caller
+    /// must hold the role mapped to the requested category. The confirmation
+    /// dialog is a frontend concern; this call happens once the user confirms.
+    /// The resulting PDF is returned for the user to download - it is not
+    /// kept anywhere server-side.
     /// </summary>
-    [HttpGet("{id:int}/file")]
-    public async Task<IActionResult> DownloadCurrent(int id, CancellationToken cancellationToken)
+    [HttpPost("{id:int}/sign")]
+    [RequestSizeLimit(RequestSizeLimitCeilingBytes)]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> Sign(int id, [FromForm] SignDocumentRequest request, CancellationToken cancellationToken)
     {
         var document = await _documentRepository.GetByIdAsync(id, cancellationToken);
         if (document is null)
@@ -161,23 +179,9 @@ public class DocumentsController : ControllerBase
             return NotFound();
         }
 
-        var currentBytes = await _fileStore.ReadCurrentAsync(id, cancellationToken);
-        return File(currentBytes, "application/pdf", $"{document.FileName}.pdf");
-    }
-
-    /// <summary>
-    /// Signs the document for one category. Categories must be signed in
-    /// order (Opracował, then Sprawdził, then Zatwierdził) and the caller
-    /// must hold the role mapped to the requested category. The confirmation
-    /// dialog is a frontend concern; this call happens once the user confirms.
-    /// </summary>
-    [HttpPost("{id:int}/sign")]
-    public async Task<IActionResult> Sign(int id, [FromBody] SignDocumentRequest request, CancellationToken cancellationToken)
-    {
-        var document = await _documentRepository.GetByIdAsync(id, cancellationToken);
-        if (document is null)
+        if (request.File.Length == 0)
         {
-            return NotFound();
+            return BadRequest("The uploaded file is empty.");
         }
 
         if (document.Signatures.Any(s => s.Category == request.Category))
@@ -198,15 +202,28 @@ public class DocumentsController : ControllerBase
             return Forbid();
         }
 
+        byte[] currentBytes;
+        using (var memoryStream = new MemoryStream())
+        {
+            await request.File.CopyToAsync(memoryStream, cancellationToken);
+            currentBytes = memoryStream.ToArray();
+        }
+
+        var uploadedHash = Convert.ToHexString(SHA256.HashData(currentBytes));
+        if (!string.Equals(uploadedHash, document.CurrentHash, StringComparison.OrdinalIgnoreCase))
+        {
+            return Conflict(
+                "The uploaded file doesn't match this document's last known state. " +
+                "Re-fetch the current version (GET /api/documents/{id}) before signing.");
+        }
+
         var signedAtUtc = DateTime.UtcNow;
         var signedBy = CurrentUserName;
-        var rows = BuildRows(document, request.Category, signedBy, signedAtUtc);
 
         byte[] renderedBytes;
         try
         {
-            var originalBytes = await _fileStore.ReadOriginalAsync(id, cancellationToken);
-            renderedBytes = _pdfSigningService.RenderSignatureTable(originalBytes, rows);
+            renderedBytes = _pdfSigningService.FillSignatureRow(currentBytes, request.Category, signedBy, signedAtUtc);
         }
         catch (Exception ex)
         {
@@ -224,7 +241,6 @@ public class DocumentsController : ControllerBase
         }
 
         var documentHash = Convert.ToHexString(SHA256.HashData(renderedBytes));
-        await _fileStore.SaveCurrentAsync(id, renderedBytes, cancellationToken);
 
         await _documentRepository.AddSignatureAsync(new DocumentSignature
         {
@@ -236,8 +252,22 @@ public class DocumentsController : ControllerBase
         }, cancellationToken);
         await _documentRepository.UpdateCurrentHashAsync(id, documentHash, cancellationToken);
 
+        // Re-fetch rather than infer from the pre-add snapshot: EF's relationship
+        // fixup already appends the just-added signature to document.Signatures
+        // in-memory (same tracked DbContext), so a "+1" against that collection
+        // would double-count it.
         var updated = await _documentRepository.GetByIdAsync(id, cancellationToken);
-        return Ok(ToStatusResponse(updated!));
+        var isFullySigned = updated!.Signatures.Count >= SignatureCategoryExtensions.Sequence.Count;
+        Response.Headers["X-Document-Id"] = updated.Id.ToString();
+        Response.Headers["X-Fully-Signed"] = isFullySigned.ToString();
+        if (!isFullySigned)
+        {
+            var remainingNext = SignatureCategoryExtensions.Sequence
+                .First(c => updated.Signatures.All(s => s.Category != c));
+            Response.Headers["X-Next-Expected-Category"] = remainingNext.ToString();
+        }
+
+        return File(renderedBytes, "application/pdf", $"{updated.FileName}.pdf");
     }
 
     /// <summary>
@@ -283,24 +313,6 @@ public class DocumentsController : ControllerBase
 
     private string CurrentUserName =>
         User.Identity?.Name ?? User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unknown";
-
-    private static List<SignatureRowInfo> BuildRows(
-        Document document,
-        SignatureCategory? newCategory = null,
-        string? newSignedBy = null,
-        DateTime? newSignedAtUtc = null)
-    {
-        return SignatureCategoryExtensions.Sequence.Select(category =>
-        {
-            if (category == newCategory)
-            {
-                return new SignatureRowInfo(category, newSignedBy, newSignedAtUtc);
-            }
-
-            var existing = document.Signatures.FirstOrDefault(s => s.Category == category);
-            return new SignatureRowInfo(category, existing?.SignedBy, existing?.SignedAtUtc);
-        }).ToList();
-    }
 
     private static DocumentStatusResponse ToStatusResponse(Document document)
     {

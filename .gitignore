@@ -6,9 +6,6 @@
 # dotenv files
 .env
 
-# Local document storage (DocumentStorage:BasePath default)
-src/DocumentsApi.Api/App_Data/
-
 # User-specific files
 *.rsuser
 *.suo
