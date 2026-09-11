@@ -18,7 +18,9 @@ and is responsible for resubmitting them at the next signing stage.
 1. `POST /api/documents` - upload a new document. Rejected if:
    - empty, over the size limit, or not a PDF
    - the file name doesn't follow the `<RepositoryId>#<ProjectName>#<Version>.pdf`
-     convention (e.g. `729#VIPD2#v1.00.16.pdf`)
+     convention (e.g. `729#VIPD2#v1.00.16.pdf`) - `Version` must contain
+     exactly one or two dots (`v1.00` and `v1.00.16` are both valid; `v1`
+     and `v1.00.16.20` are not)
 
    On success, a blank three-row signature table is stamped onto the last
    page and the **PDF bytes are returned in the response body** (no
@@ -224,6 +226,7 @@ src/DocumentsApi.Api/                    # host project (Microsoft.NET.Sdk.Web)
   Controllers/DocumentsController.cs     # upload / status / sign / verify
   Dtos/                                  # request/response wire contracts
   Errors/                                # ErrorCodes + the ProblemDetails-building helper
+  Validation/DocumentFileNameValidator.cs # file name convention parsing - unit tested
   Program.cs                             # composition root: DI, auth, EF, migrations
   appsettings*.json
 
@@ -238,7 +241,19 @@ src/DocumentsApi.Core/                   # class library (Microsoft.NET.Sdk + Fr
   Auth/DevHeaderAuthenticationHandler.cs # Development-only auth fallback
   Pdf/EmbeddedFontResolver.cs            # embedded-font PDF font resolver
   Options/                               # PdfSignature, DocumentUpload, Auth, SignaturePermissions
+
+tests/DocumentsApi.Api.Tests/            # xUnit - references Api directly, no HTTP/DB needed
 ```
+
+## Running tests
+
+```bash
+dotnet test tests/DocumentsApi.Api.Tests/DocumentsApi.Api.Tests.csproj
+```
+
+`DocumentFileNameValidator` is deliberately a pure `string -> bool`/struct function
+with no ASP.NET Core or EF Core dependencies, so its tests need no mocking,
+no `IFormFile`, and no database.
 
 Core isn't a Web SDK project, but a few of its types (`AuthenticationHandler<T>`,
 `IFormFile`) come from ASP.NET Core, so its `.csproj` adds

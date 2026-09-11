@@ -1,8 +1,8 @@
 using System.Security.Claims;
 using System.Security.Cryptography;
-using System.Text.RegularExpressions;
 using DocumentsApi.Api.Dtos;
 using DocumentsApi.Api.Errors;
+using DocumentsApi.Api.Validation;
 using DocumentsApi.Core.Data.Entities;
 using DocumentsApi.Core.Domain;
 using DocumentsApi.Core.Options;
@@ -26,9 +26,6 @@ namespace DocumentsApi.Api.Controllers;
 public class DocumentsController : ControllerBase
 {
     private const long RequestSizeLimitCeilingBytes = 100 * 1024 * 1024;
-
-    private static readonly Regex FileNamePattern =
-        new(@"^(?<repo>[^#]+)#(?<project>[^#]+)#(?<version>[^#]+)$", RegexOptions.Compiled);
 
     private readonly IPdfSigningService _pdfSigningService;
     private readonly IDocumentSignatureRepository _signatureRepository;
@@ -86,7 +83,7 @@ public class DocumentsController : ControllerBase
         }
 
         var baseFileName = Path.GetFileNameWithoutExtension(request.File.FileName);
-        if (!FileNamePattern.IsMatch(baseFileName))
+        if (!DocumentFileNameValidator.TryParse(baseFileName, out _))
         {
             return this.Error(
                 StatusCodes.Status400BadRequest,
@@ -165,8 +162,7 @@ public class DocumentsController : ControllerBase
         }
 
         var baseFileName = request.FileName;
-        var match = FileNamePattern.Match(baseFileName);
-        if (!match.Success)
+        if (!DocumentFileNameValidator.TryParse(baseFileName, out var fileNameParts))
         {
             return this.Error(
                 StatusCodes.Status400BadRequest,
@@ -264,9 +260,9 @@ public class DocumentsController : ControllerBase
         await _signatureRepository.AddAsync(new DocumentSignature
         {
             FileName = baseFileName,
-            RepositoryId = match.Groups["repo"].Value,
-            ProjectName = match.Groups["project"].Value,
-            Version = match.Groups["version"].Value,
+            RepositoryId = fileNameParts.RepositoryId,
+            ProjectName = fileNameParts.ProjectName,
+            Version = fileNameParts.Version,
             Category = request.Category,
             SignedBy = signedBy,
             SignedAtUtc = signedAtUtc,
