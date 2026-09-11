@@ -10,5 +10,5 @@ public class DocumentUploadOptions
 {
     public const string SectionName = "DocumentUpload";
 
-    public long MaxFileSizeBytes { get; set; } = 25 * 1024 * 1024;
+    public long MaxFileSizeBytes { get; set; } = 50 * 1024 * 1024;
 }

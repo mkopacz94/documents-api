@@ -262,7 +262,7 @@ dotnet ef migrations add <Name> \
 |                       | `RowHeight`       | Row height (points)                                    | `18`    |
 |                       | `MarginLeft/Right`| Table left/right margins (points)                      | `40`    |
 |                       | `MarginBottom`    | Distance from page bottom (points)                     | `30`    |
-| `DocumentUpload`      | `MaxFileSizeBytes`| Upload size limit                                      | `25 MB` |
+| `DocumentUpload`      | `MaxFileSizeBytes`| Upload size limit                                      | `50 MB` |
 | `Auth`                | `Authority`       | External identity provider issuer URL                  | *(empty - dev fallback)* |
 |                       | `Audience`        | Expected JWT audience                                  | *(empty)* |
 | `SignaturePermissions`| `Opracowal` etc.  | Role/group name per signature category                | `DocumentSigner.*` |
