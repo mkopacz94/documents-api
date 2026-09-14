@@ -30,23 +30,23 @@ public class DocumentsController : ControllerBase
     private readonly IPdfSigningService _pdfSigningService;
     private readonly IDocumentSignatureRepository _signatureRepository;
     private readonly ISigningFailureLogger _failureLogger;
+    private readonly ISigningWorkflowService _signingWorkflow;
     private readonly DocumentUploadOptions _uploadOptions;
-    private readonly SignaturePermissionOptions _permissionOptions;
     private readonly ILogger<DocumentsController> _logger;
 
     public DocumentsController(
         IPdfSigningService pdfSigningService,
         IDocumentSignatureRepository signatureRepository,
         ISigningFailureLogger failureLogger,
+        ISigningWorkflowService signingWorkflow,
         IOptions<DocumentUploadOptions> uploadOptions,
-        IOptions<SignaturePermissionOptions> permissionOptions,
         ILogger<DocumentsController> logger)
     {
         _pdfSigningService = pdfSigningService;
         _signatureRepository = signatureRepository;
         _failureLogger = failureLogger;
+        _signingWorkflow = signingWorkflow;
         _uploadOptions = uploadOptions.Value;
-        _permissionOptions = permissionOptions.Value;
         _logger = logger;
     }
 
@@ -173,36 +173,6 @@ public class DocumentsController : ControllerBase
 
         var existing = await _signatureRepository.GetByFileNameAsync(baseFileName, cancellationToken);
 
-        if (existing.Any(s => s.Category == request.Category))
-        {
-            return this.Error(
-                StatusCodes.Status409Conflict,
-                ErrorCodes.AlreadySigned,
-                $"'{baseFileName}' has already been signed for category '{request.Category}'.",
-                new { fileName = baseFileName, category = request.Category.ToString() });
-        }
-
-        var sequence = SignatureCategoryExtensions.Sequence;
-        var nextExpected = sequence.First(c => existing.All(s => s.Category != c));
-        if (request.Category != nextExpected)
-        {
-            return this.Error(
-                StatusCodes.Status409Conflict,
-                ErrorCodes.OutOfOrderSignature,
-                $"Signatures must be applied in order. The next expected category for '{baseFileName}' is '{nextExpected}'.",
-                new { fileName = baseFileName, nextExpectedCategory = nextExpected.ToString() });
-        }
-
-        var requiredRole = _permissionOptions.RoleFor(request.Category);
-        if (!User.IsInRole(requiredRole))
-        {
-            return this.Error(
-                StatusCodes.Status403Forbidden,
-                ErrorCodes.RoleNotAuthorized,
-                $"You don't have the '{requiredRole}' role required to sign as '{request.Category}'.",
-                new { category = request.Category.ToString(), requiredRole });
-        }
-
         byte[] currentBytes;
         using (var memoryStream = new MemoryStream())
         {
@@ -210,24 +180,11 @@ public class DocumentsController : ControllerBase
             currentBytes = memoryStream.ToArray();
         }
 
-        // The first category has no prior stage to compare against - anything
-        // that passes the checks above is accepted as the starting point.
-        // Every later category must hash-match the immediately preceding
-        // stage's logged result.
-        var categoryIndex = sequence.ToList().IndexOf(request.Category);
-        if (categoryIndex > 0)
+        var precheck = _signingWorkflow.ValidateSigningRequest(baseFileName, existing, request.Category, User, currentBytes);
+        if (!precheck.IsValid)
         {
-            var preceding = existing.First(s => s.Category == sequence[categoryIndex - 1]);
-            var uploadedHash = Convert.ToHexString(SHA256.HashData(currentBytes));
-            if (!string.Equals(uploadedHash, preceding.DocumentHash, StringComparison.OrdinalIgnoreCase))
-            {
-                return this.Error(
-                    StatusCodes.Status409Conflict,
-                    ErrorCodes.StaleDocumentState,
-                    "The uploaded file doesn't match this document's last known state. " +
-                    "Re-fetch the current version (GET /api/documents/status) before signing.",
-                    new { fileName = baseFileName });
-            }
+            var reason = precheck.FailureReason!.Value;
+            return this.Error(StatusCodeFor(reason), ErrorCodeFor(reason), precheck.Message!, precheck.ErrorData);
         }
 
         var signedAtUtc = DateTime.UtcNow;
@@ -269,11 +226,12 @@ public class DocumentsController : ControllerBase
             DocumentHash = documentHash,
         }, cancellationToken);
 
-        var isFullySigned = existing.Count + 1 >= sequence.Count;
+        var isFullySigned = existing.Count + 1 >= SignatureCategoryExtensions.Sequence.Count;
         Response.Headers["X-Fully-Signed"] = isFullySigned.ToString();
         if (!isFullySigned)
         {
-            var remainingNext = sequence.First(c => c != request.Category && existing.All(s => s.Category != c));
+            var remainingNext = SignatureCategoryExtensions.Sequence
+                .First(c => c != request.Category && existing.All(s => s.Category != c));
             Response.Headers["X-Next-Expected-Category"] = remainingNext.ToString();
         }
 
@@ -322,12 +280,29 @@ public class DocumentsController : ControllerBase
     private string CurrentUserName =>
         User.Identity?.Name ?? User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unknown";
 
+    private static int StatusCodeFor(SigningFailureReason reason) => reason switch
+    {
+        SigningFailureReason.RoleNotAuthorized => StatusCodes.Status403Forbidden,
+        SigningFailureReason.AlreadySigned or SigningFailureReason.OutOfOrder or SigningFailureReason.StaleDocumentState
+            => StatusCodes.Status409Conflict,
+        _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, null),
+    };
+
+    private static string ErrorCodeFor(SigningFailureReason reason) => reason switch
+    {
+        SigningFailureReason.AlreadySigned => ErrorCodes.AlreadySigned,
+        SigningFailureReason.OutOfOrder => ErrorCodes.OutOfOrderSignature,
+        SigningFailureReason.RoleNotAuthorized => ErrorCodes.RoleNotAuthorized,
+        SigningFailureReason.StaleDocumentState => ErrorCodes.StaleDocumentState,
+        _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, null),
+    };
+
     private static DocumentStatusResponse ToStatusResponse(string fileName, IReadOnlyList<DocumentSignature> signatures)
     {
-        var isFullySigned = signatures.Count >= SignatureCategoryExtensions.Sequence.Count;
+        var isFullySigned = SignatureCategoryExtensions.IsFullySigned(signatures);
         SignatureCategory? nextExpected = isFullySigned
             ? null
-            : SignatureCategoryExtensions.Sequence.First(c => signatures.All(s => s.Category != c));
+            : SignatureCategoryExtensions.GetNextExpected(signatures);
 
         return new DocumentStatusResponse
         {

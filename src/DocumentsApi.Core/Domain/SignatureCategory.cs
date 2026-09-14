@@ -1,3 +1,5 @@
+using DocumentsApi.Core.Data.Entities;
+
 namespace DocumentsApi.Core.Domain;
 
 /// <summary>
@@ -29,4 +31,15 @@ public static class SignatureCategoryExtensions
         SignatureCategory.Zatwierdzil => "Zatwierdził",
         _ => category.ToString(),
     };
+
+    /// <summary>
+    /// The next category still awaiting a signature, in sequence order.
+    /// Throws if every category in <see cref="Sequence"/> is already signed -
+    /// callers should check <see cref="IsFullySigned"/> first.
+    /// </summary>
+    public static SignatureCategory GetNextExpected(IReadOnlyList<DocumentSignature> signatures) =>
+        Sequence.First(category => signatures.All(s => s.Category != category));
+
+    public static bool IsFullySigned(IReadOnlyList<DocumentSignature> signatures) =>
+        signatures.Count >= Sequence.Count;
 }
