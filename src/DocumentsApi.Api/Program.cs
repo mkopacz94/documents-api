@@ -4,6 +4,7 @@ using DocumentsApi.Core.Data;
 using DocumentsApi.Core.Options;
 using DocumentsApi.Core.Pdf;
 using DocumentsApi.Core.Services;
+using DocumentsApi.Core.Services.Signing;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;

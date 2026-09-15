@@ -1,5 +1,6 @@
 using DocumentsApi.Core.Data;
 using DocumentsApi.Core.Data.Entities;
+using DocumentsApi.Core.Services.Signing;
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 

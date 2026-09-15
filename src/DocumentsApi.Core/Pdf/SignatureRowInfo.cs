@@ -1,6 +1,6 @@
 using DocumentsApi.Core.Domain;
 
-namespace DocumentsApi.Core.Services;
+namespace DocumentsApi.Core.Pdf;
 
 /// <summary>
 /// One row of the signature table. <see cref="SignedBy"/>/<see cref="SignedAtUtc"/>

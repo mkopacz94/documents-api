@@ -1,6 +1,6 @@
 using DocumentsApi.Core.Domain;
 
-namespace DocumentsApi.Core.Services;
+namespace DocumentsApi.Core.Services.Signing;
 
 /// <summary>
 /// Why a signing request failed the business-rule precheck, independent of

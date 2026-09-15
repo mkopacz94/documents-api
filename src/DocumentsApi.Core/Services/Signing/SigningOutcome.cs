@@ -1,6 +1,6 @@
 using DocumentsApi.Core.Domain;
 
-namespace DocumentsApi.Core.Services;
+namespace DocumentsApi.Core.Services.Signing;
 
 /// <summary>
 /// Result of <see cref="IDocumentSigningService.SignAsync"/>: either the

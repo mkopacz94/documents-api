@@ -2,7 +2,7 @@ using System.Security.Claims;
 using DocumentsApi.Core.Data.Entities;
 using DocumentsApi.Core.Domain;
 
-namespace DocumentsApi.Core.Services;
+namespace DocumentsApi.Core.Services.Signing;
 
 /// <summary>
 /// Business rules a signing request must satisfy, separate from PDF

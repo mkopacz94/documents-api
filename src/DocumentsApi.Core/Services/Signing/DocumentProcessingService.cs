@@ -2,9 +2,11 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using DocumentsApi.Core.Data.Entities;
 using DocumentsApi.Core.Domain;
+using DocumentsApi.Core.Pdf;
+using DocumentsApi.Core.Services;
 using Microsoft.Extensions.Logging;
 
-namespace DocumentsApi.Core.Services;
+namespace DocumentsApi.Core.Services.Signing;
 
 public class DocumentProcessingService : IDocumentProcessingService
 {

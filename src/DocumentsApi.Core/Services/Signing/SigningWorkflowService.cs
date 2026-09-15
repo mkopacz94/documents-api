@@ -5,7 +5,7 @@ using DocumentsApi.Core.Domain;
 using DocumentsApi.Core.Options;
 using Microsoft.Extensions.Options;
 
-namespace DocumentsApi.Core.Services;
+namespace DocumentsApi.Core.Services.Signing;
 
 public class SigningWorkflowService : ISigningWorkflowService
 {

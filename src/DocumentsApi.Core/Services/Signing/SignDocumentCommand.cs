@@ -1,7 +1,7 @@
 using System.Security.Claims;
 using DocumentsApi.Core.Domain;
 
-namespace DocumentsApi.Core.Services;
+namespace DocumentsApi.Core.Services.Signing;
 
 /// <summary>
 /// Everything <see cref="IDocumentSigningService"/> needs to attempt a single

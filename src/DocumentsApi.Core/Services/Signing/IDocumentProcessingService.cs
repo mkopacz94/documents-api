@@ -1,4 +1,7 @@
-namespace DocumentsApi.Core.Services;
+using DocumentsApi.Core.Pdf;
+using DocumentsApi.Core.Services;
+
+namespace DocumentsApi.Core.Services.Signing;
 
 /// <summary>
 /// Orchestrates both operations that touch a document's PDF bytes:

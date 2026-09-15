@@ -1,4 +1,4 @@
-namespace DocumentsApi.Core.Services;
+namespace DocumentsApi.Core.Services.Signing;
 
 /// <summary>
 /// Thrown when persisting a <see cref="Data.Entities.DocumentSignature"/> hits

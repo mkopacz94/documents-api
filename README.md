@@ -235,13 +235,12 @@ src/DocumentsApi.Core/                   # class library (Microsoft.NET.Sdk + Fr
   Data/AppDbContext.cs                   # EF Core DbContext (MySQL via Pomelo)
   Data/Entities/                         # DocumentSignature (the log), SigningFailure
   Data/Migrations/                       # EF Core migrations
-  Services/PdfSigningService.cs          # renders the blank table / fills one row
   Services/DocumentSignatureRepository.cs # the signing log - the only thing persisted
   Services/SigningFailureLogger.cs       # audit log for failed sign attempts
-  Services/SigningWorkflowService.cs     # signing rules: order, duplicates, role, hash staleness
-  Services/DocumentProcessingService.cs  # orchestrates upload-prep and one sign attempt end to end
+  Services/Signing/                      # ISigningWorkflowService, IDocumentProcessingService + their
+                                          # command/result types (SignDocumentCommand, SigningOutcome, ...)
   Auth/DevHeaderAuthenticationHandler.cs # Development-only auth fallback
-  Pdf/EmbeddedFontResolver.cs            # embedded-font PDF font resolver
+  Pdf/                                   # IPdfSigningService, EmbeddedFontResolver, SignatureRowInfo
   Options/                               # PdfSignature, DocumentUpload, Auth, SignaturePermissions
 
 tests/DocumentsApi.Api.Tests/            # xUnit - references Api directly, no HTTP/DB needed

@@ -6,6 +6,7 @@ using DocumentsApi.Core.Data.Entities;
 using DocumentsApi.Core.Domain;
 using DocumentsApi.Core.Options;
 using DocumentsApi.Core.Services;
+using DocumentsApi.Core.Services.Signing;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;

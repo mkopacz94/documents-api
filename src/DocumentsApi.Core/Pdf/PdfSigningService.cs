@@ -1,12 +1,11 @@
 using DocumentsApi.Core.Domain;
 using DocumentsApi.Core.Options;
-using DocumentsApi.Core.Pdf;
 using Microsoft.Extensions.Options;
 using PdfSharpCore.Drawing;
 using PdfSharpCore.Pdf;
 using PdfSharpCore.Pdf.IO;
 
-namespace DocumentsApi.Core.Services;
+namespace DocumentsApi.Core.Pdf;
 
 public class PdfSigningService : IPdfSigningService
 {

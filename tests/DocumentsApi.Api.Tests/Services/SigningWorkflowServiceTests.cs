@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 using DocumentsApi.Core.Data.Entities;
 using DocumentsApi.Core.Domain;
 using DocumentsApi.Core.Options;
-using DocumentsApi.Core.Services;
+using DocumentsApi.Core.Services.Signing;
 using Microsoft.Extensions.Options;
 using Xunit;
 

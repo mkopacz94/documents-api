@@ -1,4 +1,4 @@
-namespace DocumentsApi.Core.Services;
+namespace DocumentsApi.Core.Services.Signing;
 
 /// <summary>
 /// Result of <see cref="IDocumentProcessingService.PrepareForSigning"/>. Only
