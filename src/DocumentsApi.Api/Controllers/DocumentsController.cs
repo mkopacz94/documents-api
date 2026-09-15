@@ -191,9 +191,11 @@ public class DocumentsController : ControllerBase
         if (!outcome.IsValid)
         {
             var reason = outcome.FailureReason!.Value;
-            _logger.LogInformation(
+            var statusCode = StatusCodeFor(reason);
+            _logger.Log(
+                LogLevelFor(statusCode),
                 "Sign rejected for {FileName}/{Category}: {Reason}.", baseFileName, request.Category, reason);
-            return this.Error(StatusCodeFor(reason), ErrorCodeFor(reason), outcome.Message!, outcome.ErrorData);
+            return this.Error(statusCode, ErrorCodeFor(reason), outcome.Message!, outcome.ErrorData);
         }
 
         _logger.LogInformation(
@@ -271,6 +273,20 @@ public class DocumentsController : ControllerBase
         SigningFailureReason.StaleDocumentState => ErrorCodes.StaleDocumentState,
         SigningFailureReason.ProcessingFailed => ErrorCodes.SigningFailed,
         _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, null),
+    };
+
+    /// <summary>
+    /// A 5xx means something actually broke on our side - worth Warning even
+    /// though it's still handled and turned into a clean response. A 403 is
+    /// routine here too, but it's a security-relevant signal (someone
+    /// attempted an action without the required role), so it's raised above
+    /// the 409 conflicts, which are just expected races/ordering mistakes.
+    /// </summary>
+    private static LogLevel LogLevelFor(int statusCode) => statusCode switch
+    {
+        >= 500 => LogLevel.Warning,
+        StatusCodes.Status403Forbidden => LogLevel.Warning,
+        _ => LogLevel.Information,
     };
 
     private static DocumentStatusResponse ToStatusResponse(string fileName, IReadOnlyList<DocumentSignature> signatures)
