@@ -10,9 +10,34 @@ using Xunit;
 
 namespace DocumentsApi.Api.Tests.Services;
 
-public class DocumentSigningServiceTests
+public class DocumentProcessingServiceTests
 {
     private const string FileName = "729#VIPD2#v1.00.16";
+
+    [Fact]
+    public void PrepareForSigning_ReturnsRenderedBytes_OnSuccess()
+    {
+        var pdfSigningService = new FakePdfSigningService();
+        var service = CreateService(new FakeSignatureRepository(), pdfSigningService, out _);
+
+        var outcome = service.PrepareForSigning(FileName, [1, 2, 3]);
+
+        Assert.True(outcome.IsValid);
+        Assert.Equal(new byte[] { 1, 2, 3 }, outcome.RenderedBytes);
+    }
+
+    [Fact]
+    public void PrepareForSigning_ReturnsFailure_WhenRenderingThrows()
+    {
+        var pdfSigningService = new FakePdfSigningService { ThrowOnRenderTable = true };
+        var service = CreateService(new FakeSignatureRepository(), pdfSigningService, out _);
+
+        var outcome = service.PrepareForSigning(FileName, [1, 2, 3]);
+
+        Assert.False(outcome.IsValid);
+        Assert.Null(outcome.RenderedBytes);
+        Assert.NotNull(outcome.ErrorMessage);
+    }
 
     [Fact]
     public async Task SignAsync_ReturnsFailureFromPrecheck_WithoutRenderingOrPersisting()
@@ -104,19 +129,19 @@ public class DocumentSigningServiceTests
         Assert.Null(outcome.NextExpectedCategory);
     }
 
-    private static DocumentSigningService CreateService(
+    private static DocumentProcessingService CreateService(
         FakeSignatureRepository repository,
         FakePdfSigningService pdfSigningService,
         out FakeFailureLogger failureLogger)
     {
         failureLogger = new FakeFailureLogger();
         var workflow = new SigningWorkflowService(Options.Create(new SignaturePermissionOptions()));
-        return new DocumentSigningService(
+        return new DocumentProcessingService(
             repository,
             workflow,
             pdfSigningService,
             failureLogger,
-            NullLogger<DocumentSigningService>.Instance);
+            NullLogger<DocumentProcessingService>.Instance);
     }
 
     private static SignDocumentCommand Command(SignatureCategory category, ClaimsPrincipal user) =>
@@ -163,9 +188,19 @@ public class DocumentSigningServiceTests
     {
         public bool ThrowOnFill { get; init; }
 
+        public bool ThrowOnRenderTable { get; init; }
+
         public bool FillSignatureRowCalled { get; private set; }
 
-        public byte[] RenderSignatureTable(byte[] originalPdf, IReadOnlyList<SignatureRowInfo> rows) => originalPdf;
+        public byte[] RenderSignatureTable(byte[] originalPdf, IReadOnlyList<SignatureRowInfo> rows)
+        {
+            if (ThrowOnRenderTable)
+            {
+                throw new InvalidOperationException("Simulated PDF rendering failure.");
+            }
+
+            return originalPdf;
+        }
 
         public byte[] FillSignatureRow(byte[] currentPdf, SignatureCategory category, string signedBy, DateTime signedAtUtc)
         {

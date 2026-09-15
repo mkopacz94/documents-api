@@ -26,24 +26,18 @@ public class DocumentsController : ControllerBase
 {
     private const long RequestSizeLimitCeilingBytes = 100 * 1024 * 1024;
 
-    private readonly IPdfSigningService _pdfSigningService;
     private readonly IDocumentSignatureRepository _signatureRepository;
-    private readonly IDocumentSigningService _documentSigningService;
+    private readonly IDocumentProcessingService _documentProcessingService;
     private readonly DocumentUploadOptions _uploadOptions;
-    private readonly ILogger<DocumentsController> _logger;
 
     public DocumentsController(
-        IPdfSigningService pdfSigningService,
         IDocumentSignatureRepository signatureRepository,
-        IDocumentSigningService documentSigningService,
-        IOptions<DocumentUploadOptions> uploadOptions,
-        ILogger<DocumentsController> logger)
+        IDocumentProcessingService documentProcessingService,
+        IOptions<DocumentUploadOptions> uploadOptions)
     {
-        _pdfSigningService = pdfSigningService;
         _signatureRepository = signatureRepository;
-        _documentSigningService = documentSigningService;
+        _documentProcessingService = documentProcessingService;
         _uploadOptions = uploadOptions.Value;
-        _logger = logger;
     }
 
     /// <summary>
@@ -95,19 +89,10 @@ public class DocumentsController : ControllerBase
             sourceBytes = memoryStream.ToArray();
         }
 
-        var blankRows = SignatureCategoryExtensions.Sequence
-            .Select(category => new SignatureRowInfo(category, null, null))
-            .ToList();
-
-        byte[] renderedBytes;
-        try
+        var outcome = _documentProcessingService.PrepareForSigning(baseFileName, sourceBytes);
+        if (!outcome.IsValid)
         {
-            renderedBytes = _pdfSigningService.RenderSignatureTable(sourceBytes, blankRows);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to prepare signature table for {FileName}", baseFileName);
-            return this.Error(StatusCodes.Status400BadRequest, ErrorCodes.FileProcessingFailed, "The uploaded file could not be processed as a PDF.");
+            return this.Error(StatusCodes.Status400BadRequest, ErrorCodes.FileProcessingFailed, outcome.ErrorMessage!);
         }
 
         Response.Headers["X-File-Name"] = baseFileName;
@@ -115,7 +100,7 @@ public class DocumentsController : ControllerBase
 
         // No Content-Disposition/file name here: this response is meant to be
         // displayed to the user (e.g. an embedded PDF viewer), not downloaded.
-        return File(renderedBytes, "application/pdf");
+        return File(outcome.RenderedBytes!, "application/pdf");
     }
 
     /// <summary>
@@ -183,7 +168,7 @@ public class DocumentsController : ControllerBase
             User,
             currentBytes);
 
-        var outcome = await _documentSigningService.SignAsync(command, cancellationToken);
+        var outcome = await _documentProcessingService.SignAsync(command, cancellationToken);
         if (!outcome.IsValid)
         {
             var reason = outcome.FailureReason!.Value;

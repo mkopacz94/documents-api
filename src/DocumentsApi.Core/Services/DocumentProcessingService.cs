@@ -6,26 +6,44 @@ using Microsoft.Extensions.Logging;
 
 namespace DocumentsApi.Core.Services;
 
-public class DocumentSigningService : IDocumentSigningService
+public class DocumentProcessingService : IDocumentProcessingService
 {
     private readonly IDocumentSignatureRepository _signatureRepository;
     private readonly ISigningWorkflowService _signingWorkflow;
     private readonly IPdfSigningService _pdfSigningService;
     private readonly ISigningFailureLogger _failureLogger;
-    private readonly ILogger<DocumentSigningService> _logger;
+    private readonly ILogger<DocumentProcessingService> _logger;
 
-    public DocumentSigningService(
+    public DocumentProcessingService(
         IDocumentSignatureRepository signatureRepository,
         ISigningWorkflowService signingWorkflow,
         IPdfSigningService pdfSigningService,
         ISigningFailureLogger failureLogger,
-        ILogger<DocumentSigningService> logger)
+        ILogger<DocumentProcessingService> logger)
     {
         _signatureRepository = signatureRepository;
         _signingWorkflow = signingWorkflow;
         _pdfSigningService = pdfSigningService;
         _failureLogger = failureLogger;
         _logger = logger;
+    }
+
+    public DocumentUploadOutcome PrepareForSigning(string fileName, byte[] sourceBytes)
+    {
+        var blankRows = SignatureCategoryExtensions.Sequence
+            .Select(category => new SignatureRowInfo(category, null, null))
+            .ToList();
+
+        try
+        {
+            var renderedBytes = _pdfSigningService.RenderSignatureTable(sourceBytes, blankRows);
+            return DocumentUploadOutcome.Success(renderedBytes);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to prepare signature table for {FileName}", fileName);
+            return DocumentUploadOutcome.Failure("The uploaded file could not be processed as a PDF.");
+        }
     }
 
     public async Task<SigningOutcome> SignAsync(SignDocumentCommand command, CancellationToken cancellationToken = default)
