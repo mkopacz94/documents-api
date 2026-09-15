@@ -68,6 +68,7 @@ builder.Services.AddScoped<IDocumentSignatureRepository, DocumentSignatureReposi
 builder.Services.AddScoped<ISigningFailureLogger, SigningFailureLogger>();
 builder.Services.AddScoped<IPdfSigningService, PdfSigningService>();
 builder.Services.AddScoped<ISigningWorkflowService, SigningWorkflowService>();
+builder.Services.AddScoped<IDocumentSigningService, DocumentSigningService>();
 
 var app = builder.Build();
 

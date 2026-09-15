@@ -12,6 +12,12 @@ public enum SigningFailureReason
     OutOfOrder,
     RoleNotAuthorized,
     StaleDocumentState,
+
+    /// <summary>
+    /// The PDF itself could not be rendered (e.g. corrupted input) - not a
+    /// business-rule rejection, but still reported through the same shape.
+    /// </summary>
+    ProcessingFailed,
 }
 
 /// <summary>

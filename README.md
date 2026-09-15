@@ -239,6 +239,7 @@ src/DocumentsApi.Core/                   # class library (Microsoft.NET.Sdk + Fr
   Services/DocumentSignatureRepository.cs # the signing log - the only thing persisted
   Services/SigningFailureLogger.cs       # audit log for failed sign attempts
   Services/SigningWorkflowService.cs     # signing rules: order, duplicates, role, hash staleness
+  Services/DocumentSigningService.cs     # orchestrates one sign attempt: precheck, render, persist
   Auth/DevHeaderAuthenticationHandler.cs # Development-only auth fallback
   Pdf/EmbeddedFontResolver.cs            # embedded-font PDF font resolver
   Options/                               # PdfSignature, DocumentUpload, Auth, SignaturePermissions

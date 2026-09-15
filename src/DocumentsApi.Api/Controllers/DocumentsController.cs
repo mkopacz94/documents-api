@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using System.Security.Cryptography;
 using DocumentsApi.Api.Dtos;
 using DocumentsApi.Api.Errors;
@@ -29,23 +28,20 @@ public class DocumentsController : ControllerBase
 
     private readonly IPdfSigningService _pdfSigningService;
     private readonly IDocumentSignatureRepository _signatureRepository;
-    private readonly ISigningFailureLogger _failureLogger;
-    private readonly ISigningWorkflowService _signingWorkflow;
+    private readonly IDocumentSigningService _documentSigningService;
     private readonly DocumentUploadOptions _uploadOptions;
     private readonly ILogger<DocumentsController> _logger;
 
     public DocumentsController(
         IPdfSigningService pdfSigningService,
         IDocumentSignatureRepository signatureRepository,
-        ISigningFailureLogger failureLogger,
-        ISigningWorkflowService signingWorkflow,
+        IDocumentSigningService documentSigningService,
         IOptions<DocumentUploadOptions> uploadOptions,
         ILogger<DocumentsController> logger)
     {
         _pdfSigningService = pdfSigningService;
         _signatureRepository = signatureRepository;
-        _failureLogger = failureLogger;
-        _signingWorkflow = signingWorkflow;
+        _documentSigningService = documentSigningService;
         _uploadOptions = uploadOptions.Value;
         _logger = logger;
     }
@@ -171,8 +167,6 @@ public class DocumentsController : ControllerBase
                 "e.g. '729#VIPD2#v1.00.16' - use the value from the X-File-Name header returned by upload.");
         }
 
-        var existing = await _signatureRepository.GetByFileNameAsync(baseFileName, cancellationToken);
-
         byte[] currentBytes;
         using (var memoryStream = new MemoryStream())
         {
@@ -180,78 +174,29 @@ public class DocumentsController : ControllerBase
             currentBytes = memoryStream.ToArray();
         }
 
-        var precheck = _signingWorkflow.ValidateSigningRequest(baseFileName, existing, request.Category, User, currentBytes);
-        if (!precheck.IsValid)
+        var command = new SignDocumentCommand(
+            baseFileName,
+            fileNameParts.RepositoryId,
+            fileNameParts.ProjectName,
+            fileNameParts.Version,
+            request.Category,
+            User,
+            currentBytes);
+
+        var outcome = await _documentSigningService.SignAsync(command, cancellationToken);
+        if (!outcome.IsValid)
         {
-            var reason = precheck.FailureReason!.Value;
-            return this.Error(StatusCodeFor(reason), ErrorCodeFor(reason), precheck.Message!, precheck.ErrorData);
+            var reason = outcome.FailureReason!.Value;
+            return this.Error(StatusCodeFor(reason), ErrorCodeFor(reason), outcome.Message!, outcome.ErrorData);
         }
 
-        var signedAtUtc = DateTime.UtcNow;
-        var signedBy = CurrentUserName;
-
-        byte[] renderedBytes;
-        try
+        Response.Headers["X-Fully-Signed"] = outcome.IsFullySigned.ToString();
+        if (outcome.NextExpectedCategory is not null)
         {
-            renderedBytes = _pdfSigningService.FillSignatureRow(currentBytes, request.Category, signedBy, signedAtUtc);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to sign {FileName} for category {Category}", baseFileName, request.Category);
-            await _failureLogger.LogAsync(new SigningFailure
-            {
-                FileName = baseFileName,
-                AttemptedCategory = request.Category,
-                AttemptedBy = signedBy,
-                OccurredAtUtc = DateTime.UtcNow,
-                ErrorMessage = ex.Message,
-            }, cancellationToken);
-            return this.Error(StatusCodes.Status500InternalServerError, ErrorCodes.SigningFailed, "The document could not be signed due to an internal processing error.");
+            Response.Headers["X-Next-Expected-Category"] = outcome.NextExpectedCategory.Value.ToString();
         }
 
-        var documentHash = Convert.ToHexString(SHA256.HashData(renderedBytes));
-
-        // A single insert carries everything this signing event needs
-        // (category, signer, timestamp, hash) - there's no second write to
-        // keep in sync, so no transaction is needed here.
-        try
-        {
-            await _signatureRepository.AddAsync(new DocumentSignature
-            {
-                FileName = baseFileName,
-                RepositoryId = fileNameParts.RepositoryId,
-                ProjectName = fileNameParts.ProjectName,
-                Version = fileNameParts.Version,
-                Category = request.Category,
-                SignedBy = signedBy,
-                SignedAtUtc = signedAtUtc,
-                DocumentHash = documentHash,
-            }, cancellationToken);
-        }
-        catch (DuplicateSignatureException ex)
-        {
-            // The precheck above read "not yet signed" for this category, but
-            // a concurrent request won the race and persisted it first. Report
-            // it the same way the precheck would have.
-            _logger.LogWarning(ex, "Concurrent signing race for {FileName}/{Category}", baseFileName, request.Category);
-            var raceResult = SigningPrecheckResult.AlreadySigned(baseFileName, request.Category);
-            return this.Error(
-                StatusCodeFor(raceResult.FailureReason!.Value),
-                ErrorCodeFor(raceResult.FailureReason!.Value),
-                raceResult.Message!,
-                raceResult.ErrorData);
-        }
-
-        var isFullySigned = existing.Count + 1 >= SignatureCategoryExtensions.Sequence.Count;
-        Response.Headers["X-Fully-Signed"] = isFullySigned.ToString();
-        if (!isFullySigned)
-        {
-            var remainingNext = SignatureCategoryExtensions.Sequence
-                .First(c => c != request.Category && existing.All(s => s.Category != c));
-            Response.Headers["X-Next-Expected-Category"] = remainingNext.ToString();
-        }
-
-        return File(renderedBytes, "application/pdf", $"{baseFileName}.pdf");
+        return File(outcome.RenderedBytes!, "application/pdf", $"{baseFileName}.pdf");
     }
 
     /// <summary>
@@ -293,14 +238,12 @@ public class DocumentsController : ControllerBase
         });
     }
 
-    private string CurrentUserName =>
-        User.Identity?.Name ?? User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unknown";
-
     private static int StatusCodeFor(SigningFailureReason reason) => reason switch
     {
         SigningFailureReason.RoleNotAuthorized => StatusCodes.Status403Forbidden,
         SigningFailureReason.AlreadySigned or SigningFailureReason.OutOfOrder or SigningFailureReason.StaleDocumentState
             => StatusCodes.Status409Conflict,
+        SigningFailureReason.ProcessingFailed => StatusCodes.Status500InternalServerError,
         _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, null),
     };
 
@@ -310,6 +253,7 @@ public class DocumentsController : ControllerBase
         SigningFailureReason.OutOfOrder => ErrorCodes.OutOfOrderSignature,
         SigningFailureReason.RoleNotAuthorized => ErrorCodes.RoleNotAuthorized,
         SigningFailureReason.StaleDocumentState => ErrorCodes.StaleDocumentState,
+        SigningFailureReason.ProcessingFailed => ErrorCodes.SigningFailed,
         _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, null),
     };
 
