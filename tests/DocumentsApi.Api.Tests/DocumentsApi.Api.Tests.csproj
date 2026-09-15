@@ -32,6 +32,9 @@
          minimum-satisfying floor (8.0.13) instead, which conflicts with the
          8.0.31 already built into the referenced projects' output. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="8.0.31" />
+    <!-- Lets DocumentSignatureRepositoryTests exercise real EF Core query/save
+         behavior (ordering, filtering) without a MySQL server. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="8.0.31" />
   </ItemGroup>
 
 </Project>

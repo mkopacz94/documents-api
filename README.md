@@ -243,7 +243,7 @@ src/DocumentsApi.Core/                   # class library (Microsoft.NET.Sdk + Fr
   Pdf/                                   # IPdfSigningService, EmbeddedFontResolver, SignatureRowInfo
   Options/                               # PdfSignature, DocumentUpload, Auth, SignaturePermissions
 
-tests/DocumentsApi.Api.Tests/            # xUnit - references Api directly, no HTTP/DB needed
+tests/DocumentsApi.Api.Tests/            # xUnit - references Api directly, no HTTP or real DB needed
 ```
 
 ## Running tests
@@ -254,7 +254,14 @@ dotnet test tests/DocumentsApi.Api.Tests/DocumentsApi.Api.Tests.csproj
 
 `DocumentFileNameValidator` is deliberately a pure `string -> bool`/struct function
 with no ASP.NET Core or EF Core dependencies, so its tests need no mocking,
-no `IFormFile`, and no database.
+no `IFormFile`, and no database. `SigningWorkflowService` and
+`DocumentProcessingService` are tested against hand-rolled fakes of their
+interfaces rather than a mocking library. `DocumentSignatureRepository` is
+the one class that genuinely needs EF Core, so its tests run against the EF
+Core InMemory provider instead of MySQL - except the duplicate-key race,
+which InMemory can't reproduce (it doesn't enforce unique indexes), so that
+one test overrides `SaveChangesAsync` to throw the same shape of
+`DbUpdateException`/`MySqlException` the real driver would.
 
 Core isn't a Web SDK project, but a few of its types (`AuthenticationHandler<T>`,
 `IFormFile`) come from ASP.NET Core, so its `.csproj` adds
