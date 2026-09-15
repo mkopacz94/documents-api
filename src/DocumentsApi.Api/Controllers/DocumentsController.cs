@@ -30,15 +30,18 @@ public class DocumentsController : ControllerBase
     private readonly IDocumentSignatureRepository _signatureRepository;
     private readonly IDocumentProcessingService _documentProcessingService;
     private readonly DocumentUploadOptions _uploadOptions;
+    private readonly ILogger<DocumentsController> _logger;
 
     public DocumentsController(
         IDocumentSignatureRepository signatureRepository,
         IDocumentProcessingService documentProcessingService,
-        IOptions<DocumentUploadOptions> uploadOptions)
+        IOptions<DocumentUploadOptions> uploadOptions,
+        ILogger<DocumentsController> logger)
     {
         _signatureRepository = signatureRepository;
         _documentProcessingService = documentProcessingService;
         _uploadOptions = uploadOptions.Value;
+        _logger = logger;
     }
 
     /// <summary>
@@ -54,11 +57,15 @@ public class DocumentsController : ControllerBase
     {
         if (request.File.Length == 0)
         {
+            _logger.LogInformation("Upload rejected: empty file.");
             return this.Error(StatusCodes.Status400BadRequest, ErrorCodes.EmptyFile, "The uploaded file is empty.");
         }
 
         if (request.File.Length > _uploadOptions.MaxFileSizeBytes)
         {
+            _logger.LogInformation(
+                "Upload rejected: file size {FileSizeBytes} exceeds the {MaxSizeBytes} limit.",
+                request.File.Length, _uploadOptions.MaxFileSizeBytes);
             return this.Error(
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.FileTooLarge,
@@ -70,12 +77,14 @@ public class DocumentsController : ControllerBase
             || string.Equals(Path.GetExtension(request.File.FileName), ".pdf", StringComparison.OrdinalIgnoreCase);
         if (!isPdf)
         {
+            _logger.LogInformation("Upload rejected: unsupported content type {ContentType}.", request.File.ContentType);
             return this.Error(StatusCodes.Status400BadRequest, ErrorCodes.UnsupportedFileType, "Only PDF files are supported.");
         }
 
         var baseFileName = Path.GetFileNameWithoutExtension(request.File.FileName);
         if (!DocumentFileNameValidator.TryParse(baseFileName, out _))
         {
+            _logger.LogInformation("Upload rejected: file name {FileName} does not match the naming convention.", baseFileName);
             return this.Error(
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.InvalidFileName,
@@ -93,8 +102,13 @@ public class DocumentsController : ControllerBase
         var outcome = _documentProcessingService.PrepareForSigning(baseFileName, sourceBytes);
         if (!outcome.IsValid)
         {
+            // The underlying PDF failure itself is already logged inside
+            // DocumentProcessingService - this just records the HTTP outcome.
+            _logger.LogInformation("Upload rejected: {FileName} could not be processed.", baseFileName);
             return this.Error(StatusCodes.Status400BadRequest, ErrorCodes.FileProcessingFailed, outcome.ErrorMessage!);
         }
+
+        _logger.LogInformation("Uploaded {FileName} and prepared it for signing.", baseFileName);
 
         Response.Headers["X-File-Name"] = baseFileName;
         Response.Headers["X-Next-Expected-Category"] = SignatureCategoryExtensions.Sequence[0].ToString();
@@ -114,10 +128,12 @@ public class DocumentsController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(fileName))
         {
+            _logger.LogInformation("Status request rejected: fileName is missing.");
             return this.Error(StatusCodes.Status400BadRequest, ErrorCodes.FileNameRequired, "fileName is required.");
         }
 
         var signatures = await _signatureRepository.GetByFileNameAsync(fileName, cancellationToken);
+        _logger.LogInformation("Status requested for {FileName}: {SignatureCount} signature(s) found.", fileName, signatures.Count);
         return Ok(ToStatusResponse(fileName, signatures));
     }
 
@@ -140,12 +156,14 @@ public class DocumentsController : ControllerBase
     {
         if (request.File.Length == 0)
         {
+            _logger.LogInformation("Sign rejected: empty file.");
             return this.Error(StatusCodes.Status400BadRequest, ErrorCodes.EmptyFile, "The uploaded file is empty.");
         }
 
         var baseFileName = request.FileName;
         if (!DocumentFileNameValidator.TryParse(baseFileName, out var fileNameParts))
         {
+            _logger.LogInformation("Sign rejected: file name {FileName} does not match the naming convention.", baseFileName);
             return this.Error(
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.InvalidFileName,
@@ -173,8 +191,14 @@ public class DocumentsController : ControllerBase
         if (!outcome.IsValid)
         {
             var reason = outcome.FailureReason!.Value;
+            _logger.LogInformation(
+                "Sign rejected for {FileName}/{Category}: {Reason}.", baseFileName, request.Category, reason);
             return this.Error(StatusCodeFor(reason), ErrorCodeFor(reason), outcome.Message!, outcome.ErrorData);
         }
+
+        _logger.LogInformation(
+            "Signed {FileName} for category {Category} (fully signed: {FullySigned}).",
+            baseFileName, request.Category, outcome.IsFullySigned);
 
         Response.Headers["X-Fully-Signed"] = outcome.IsFullySigned.ToString();
         if (outcome.NextExpectedCategory is not null)
@@ -196,6 +220,7 @@ public class DocumentsController : ControllerBase
     {
         if (request.File.Length == 0)
         {
+            _logger.LogInformation("Verify rejected: empty file.");
             return this.Error(StatusCodes.Status400BadRequest, ErrorCodes.EmptyFile, "The uploaded file is empty.");
         }
 
@@ -211,8 +236,13 @@ public class DocumentsController : ControllerBase
 
         if (signature is null)
         {
+            _logger.LogInformation("Verify: no signature found matching hash {Hash}.", hash);
             return Ok(new VerifyDocumentResponse { Found = false });
         }
+
+        _logger.LogInformation(
+            "Verify: hash matched {FileName}/{Category}, signed by {SignedBy}.",
+            signature.FileName, signature.Category, signature.SignedBy);
 
         return Ok(new VerifyDocumentResponse
         {
