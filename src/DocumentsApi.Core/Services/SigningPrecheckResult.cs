@@ -1,3 +1,5 @@
+using DocumentsApi.Core.Domain;
+
 namespace DocumentsApi.Core.Services;
 
 /// <summary>
@@ -32,4 +34,15 @@ public sealed record SigningPrecheckResult
 
     public static SigningPrecheckResult Failure(SigningFailureReason reason, string message, object? errorData = null) =>
         new() { IsValid = false, FailureReason = reason, Message = message, ErrorData = errorData };
+
+    /// <summary>
+    /// Shared shape for an already-signed conflict, whether it was caught by
+    /// the in-memory precheck or by the database's unique constraint after a
+    /// concurrent request won the race.
+    /// </summary>
+    public static SigningPrecheckResult AlreadySigned(string fileName, SignatureCategory category) =>
+        Failure(
+            SigningFailureReason.AlreadySigned,
+            $"'{fileName}' has already been signed for category '{category}'.",
+            new { fileName, category = category.ToString() });
 }

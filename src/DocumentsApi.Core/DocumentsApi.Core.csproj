@@ -22,6 +22,10 @@
     <!-- 8.0.3 requires Microsoft.EntityFrameworkCore.Relational >= 8.0.13; keep in
          step with the EF Core version above to avoid an unresolved version conflict. -->
     <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="8.0.3" />
+    <!-- Pinned explicitly (already pulled in transitively by Pomelo) because
+         DocumentSignatureRepository catches MySqlException directly to
+         detect duplicate-key races. -->
+    <PackageReference Include="MySqlConnector" Version="2.3.5" />
   </ItemGroup>
 
   <ItemGroup>

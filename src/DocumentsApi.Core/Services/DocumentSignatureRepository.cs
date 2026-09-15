@@ -1,6 +1,7 @@
 using DocumentsApi.Core.Data;
 using DocumentsApi.Core.Data.Entities;
 using Microsoft.EntityFrameworkCore;
+using MySqlConnector;
 
 namespace DocumentsApi.Core.Services;
 
@@ -22,7 +23,21 @@ public class DocumentSignatureRepository : IDocumentSignatureRepository
     public async Task AddAsync(DocumentSignature signature, CancellationToken cancellationToken = default)
     {
         _dbContext.DocumentSignatures.Add(signature);
-        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        try
+        {
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is MySqlException { ErrorCode: MySqlErrorCode.DuplicateKeyEntry })
+        {
+            // The unique (FileName, Category) index rejected this insert - a
+            // concurrent request signed the same category first. Surface it
+            // as a distinct type so the caller can tell this apart from an
+            // unexpected persistence failure.
+            throw new DuplicateSignatureException(
+                $"'{signature.FileName}' was already signed for category '{signature.Category}' by a concurrent request.",
+                ex);
+        }
     }
 
     public Task<DocumentSignature?> FindByHashAsync(string hash, CancellationToken cancellationToken = default)

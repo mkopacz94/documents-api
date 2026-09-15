@@ -25,10 +25,7 @@ public class SigningWorkflowService : ISigningWorkflowService
     {
         if (existingSignatures.Any(s => s.Category == requestedCategory))
         {
-            return SigningPrecheckResult.Failure(
-                SigningFailureReason.AlreadySigned,
-                $"'{fileName}' has already been signed for category '{requestedCategory}'.",
-                new { fileName, category = requestedCategory.ToString() });
+            return SigningPrecheckResult.AlreadySigned(fileName, requestedCategory);
         }
 
         var nextExpected = SignatureCategoryExtensions.GetNextExpected(existingSignatures);

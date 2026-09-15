@@ -214,17 +214,33 @@ public class DocumentsController : ControllerBase
         // A single insert carries everything this signing event needs
         // (category, signer, timestamp, hash) - there's no second write to
         // keep in sync, so no transaction is needed here.
-        await _signatureRepository.AddAsync(new DocumentSignature
+        try
         {
-            FileName = baseFileName,
-            RepositoryId = fileNameParts.RepositoryId,
-            ProjectName = fileNameParts.ProjectName,
-            Version = fileNameParts.Version,
-            Category = request.Category,
-            SignedBy = signedBy,
-            SignedAtUtc = signedAtUtc,
-            DocumentHash = documentHash,
-        }, cancellationToken);
+            await _signatureRepository.AddAsync(new DocumentSignature
+            {
+                FileName = baseFileName,
+                RepositoryId = fileNameParts.RepositoryId,
+                ProjectName = fileNameParts.ProjectName,
+                Version = fileNameParts.Version,
+                Category = request.Category,
+                SignedBy = signedBy,
+                SignedAtUtc = signedAtUtc,
+                DocumentHash = documentHash,
+            }, cancellationToken);
+        }
+        catch (DuplicateSignatureException ex)
+        {
+            // The precheck above read "not yet signed" for this category, but
+            // a concurrent request won the race and persisted it first. Report
+            // it the same way the precheck would have.
+            _logger.LogWarning(ex, "Concurrent signing race for {FileName}/{Category}", baseFileName, request.Category);
+            var raceResult = SigningPrecheckResult.AlreadySigned(baseFileName, request.Category);
+            return this.Error(
+                StatusCodeFor(raceResult.FailureReason!.Value),
+                ErrorCodeFor(raceResult.FailureReason!.Value),
+                raceResult.Message!,
+                raceResult.ErrorData);
+        }
 
         var isFullySigned = existing.Count + 1 >= SignatureCategoryExtensions.Sequence.Count;
         Response.Headers["X-Fully-Signed"] = isFullySigned.ToString();
