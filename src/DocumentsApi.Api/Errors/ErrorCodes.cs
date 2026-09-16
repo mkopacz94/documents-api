@@ -20,4 +20,6 @@ public static class ErrorCodes
     public const string RoleNotAuthorized = "ROLE_NOT_AUTHORIZED";
     public const string StaleDocumentState = "STALE_DOCUMENT_STATE";
     public const string SigningFailed = "SIGNING_FAILED";
+    public const string NoFilesProvided = "NO_FILES_PROVIDED";
+    public const string BatchTooLarge = "BATCH_TOO_LARGE";
 }

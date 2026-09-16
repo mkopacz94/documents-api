@@ -1,4 +1,7 @@
+using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using DocumentsApi.Api.Dtos;
 using DocumentsApi.Api.Errors;
 using DocumentsApi.Api.Validation;
@@ -26,6 +29,16 @@ namespace DocumentsApi.Api.Controllers;
 public class DocumentsController : ControllerBase
 {
     private const long RequestSizeLimitCeilingBytes = 100 * 1024 * 1024;
+
+    // A generous hard backstop for the whole multipart body of a batch
+    // request - the real bound on batch size is _uploadOptions.MaxBatchSize
+    // (file count), checked below, not this constant.
+    private const long BatchRequestSizeLimitCeilingBytes = 500 * 1024 * 1024;
+
+    private static readonly JsonSerializerOptions BatchManifestJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter() },
+    };
 
     private readonly IDocumentSignatureRepository _signatureRepository;
     private readonly IDocumentProcessingService _documentProcessingService;
@@ -154,17 +167,114 @@ public class DocumentsController : ControllerBase
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> Sign([FromForm] SignDocumentRequest request, CancellationToken cancellationToken)
     {
-        if (request.File.Length == 0)
+        var result = await SignOneAsync(request.File, request.FileName, request.Category, cancellationToken);
+        if (!result.Success)
         {
-            _logger.LogInformation("Sign rejected: empty file.");
-            return this.Error(StatusCodes.Status400BadRequest, ErrorCodes.EmptyFile, "The uploaded file is empty.");
+            return this.Error(result.StatusCode!.Value, result.ErrorCode!, result.ErrorMessage!, result.ErrorData);
         }
 
-        var baseFileName = request.FileName;
-        if (!DocumentFileNameValidator.TryParse(baseFileName, out var fileNameParts))
+        Response.Headers["X-Fully-Signed"] = result.IsFullySigned!.Value.ToString();
+        if (result.NextExpectedCategory is not null)
         {
-            _logger.LogInformation("Sign rejected: file name {FileName} does not match the naming convention.", baseFileName);
+            Response.Headers["X-Next-Expected-Category"] = result.NextExpectedCategory.Value.ToString();
+        }
+
+        return File(result.RenderedBytes!, "application/pdf", $"{result.FileName}.pdf");
+    }
+
+    /// <summary>
+    /// Signs several documents in one call, each for one category - e.g.
+    /// signing a whole batch of documents as "Sprawdził" at once. Files are
+    /// processed one at a time, in the order submitted (never in parallel):
+    /// each one's precheck reads signatures the previous ones in this same
+    /// batch may have just written, so processing sequentially is what makes
+    /// a duplicate/out-of-order entry within the batch itself get caught
+    /// instead of racing.
+    ///
+    /// This is a best-effort batch, not all-or-nothing: one file failing
+    /// (wrong order, wrong role, stale hash, bad name, ...) doesn't stop the
+    /// rest from being attempted. The response is a zip containing one
+    /// "{fileName}.pdf" entry per successfully signed file, plus a
+    /// "results.json" entry listing every file's outcome (including
+    /// failures, which have no corresponding PDF entry).
+    /// </summary>
+    [HttpPost("sign/batch")]
+    [RequestSizeLimit(BatchRequestSizeLimitCeilingBytes)]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> SignBatch([FromForm] SignDocumentsBatchRequest request, CancellationToken cancellationToken)
+    {
+        if (request.Files.Count == 0)
+        {
+            _logger.LogInformation("Batch sign rejected: no files provided.");
+            return this.Error(StatusCodes.Status400BadRequest, ErrorCodes.NoFilesProvided, "At least one file must be provided.");
+        }
+
+        if (request.Files.Count > _uploadOptions.MaxBatchSize)
+        {
+            _logger.LogInformation(
+                "Batch sign rejected: {FileCount} files exceeds the {MaxBatchSize} limit.",
+                request.Files.Count, _uploadOptions.MaxBatchSize);
             return this.Error(
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BatchTooLarge,
+                $"A batch cannot contain more than {_uploadOptions.MaxBatchSize} files.",
+                new { maxBatchSize = _uploadOptions.MaxBatchSize });
+        }
+
+        var results = new List<BatchSignResultEntry>();
+
+        using var zipStream = new MemoryStream();
+        using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (var item in request.Files)
+            {
+                var result = await SignOneAsync(item.File, item.FileName, item.Category, cancellationToken);
+                results.Add(ToResultEntry(result));
+
+                if (result.Success)
+                {
+                    var entry = archive.CreateEntry($"{result.FileName}.pdf", CompressionLevel.Optimal);
+                    using var entryStream = entry.Open();
+                    await entryStream.WriteAsync(result.RenderedBytes!, cancellationToken);
+                }
+            }
+
+            var manifestEntry = archive.CreateEntry("results.json", CompressionLevel.Optimal);
+            using var manifestStream = manifestEntry.Open();
+            await JsonSerializer.SerializeAsync(manifestStream, results, BatchManifestJsonOptions, cancellationToken);
+        }
+
+        var succeeded = results.Count(r => r.Success);
+        _logger.LogInformation(
+            "Batch sign completed: {SucceededCount}/{TotalCount} file(s) signed.", succeeded, results.Count);
+
+        zipStream.Seek(0, SeekOrigin.Begin);
+        return File(zipStream.ToArray(), "application/zip", "signed-documents.zip");
+    }
+
+    /// <summary>
+    /// The full validate-and-sign sequence for one file, shared by
+    /// <see cref="Sign"/> and <see cref="SignBatch"/> so both go through
+    /// exactly the same rules and produce the same shape of outcome.
+    /// </summary>
+    private async Task<SignAttemptResult> SignOneAsync(
+        IFormFile file,
+        string fileName,
+        SignatureCategory category,
+        CancellationToken cancellationToken)
+    {
+        if (file.Length == 0)
+        {
+            _logger.LogInformation("Sign rejected for {FileName}: empty file.", fileName);
+            return SignAttemptResult.FailureResult(
+                fileName, StatusCodes.Status400BadRequest, ErrorCodes.EmptyFile, "The uploaded file is empty.");
+        }
+
+        if (!DocumentFileNameValidator.TryParse(fileName, out var fileNameParts))
+        {
+            _logger.LogInformation("Sign rejected: file name {FileName} does not match the naming convention.", fileName);
+            return SignAttemptResult.FailureResult(
+                fileName,
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.InvalidFileName,
                 "fileName must follow the '<RepositoryId>#<ProjectName>#<Version>' convention, " +
@@ -174,16 +284,16 @@ public class DocumentsController : ControllerBase
         byte[] currentBytes;
         using (var memoryStream = new MemoryStream())
         {
-            await request.File.CopyToAsync(memoryStream, cancellationToken);
+            await file.CopyToAsync(memoryStream, cancellationToken);
             currentBytes = memoryStream.ToArray();
         }
 
         var command = new SignDocumentCommand(
-            baseFileName,
+            fileName,
             fileNameParts.RepositoryId,
             fileNameParts.ProjectName,
             fileNameParts.Version,
-            request.Category,
+            category,
             User,
             currentBytes);
 
@@ -194,21 +304,15 @@ public class DocumentsController : ControllerBase
             var statusCode = StatusCodeFor(reason);
             _logger.Log(
                 LogLevelFor(statusCode),
-                "Sign rejected for {FileName}/{Category}: {Reason}.", baseFileName, request.Category, reason);
-            return this.Error(statusCode, ErrorCodeFor(reason), outcome.Message!, outcome.ErrorData);
+                "Sign rejected for {FileName}/{Category}: {Reason}.", fileName, category, reason);
+            return SignAttemptResult.FailureResult(fileName, statusCode, ErrorCodeFor(reason), outcome.Message!, outcome.ErrorData);
         }
 
         _logger.LogInformation(
             "Signed {FileName} for category {Category} (fully signed: {FullySigned}).",
-            baseFileName, request.Category, outcome.IsFullySigned);
+            fileName, category, outcome.IsFullySigned);
 
-        Response.Headers["X-Fully-Signed"] = outcome.IsFullySigned.ToString();
-        if (outcome.NextExpectedCategory is not null)
-        {
-            Response.Headers["X-Next-Expected-Category"] = outcome.NextExpectedCategory.Value.ToString();
-        }
-
-        return File(outcome.RenderedBytes!, "application/pdf", $"{baseFileName}.pdf");
+        return SignAttemptResult.SuccessResult(fileName, outcome.RenderedBytes!, outcome.IsFullySigned, outcome.NextExpectedCategory);
     }
 
     /// <summary>
@@ -288,6 +392,66 @@ public class DocumentsController : ControllerBase
         StatusCodes.Status403Forbidden => LogLevel.Warning,
         _ => LogLevel.Information,
     };
+
+    private static BatchSignResultEntry ToResultEntry(SignAttemptResult result) => new()
+    {
+        FileName = result.FileName,
+        Success = result.Success,
+        IsFullySigned = result.IsFullySigned,
+        NextExpectedCategory = result.NextExpectedCategory?.ToString(),
+        ErrorCode = result.ErrorCode,
+        ErrorMessage = result.ErrorMessage,
+        ErrorData = result.ErrorData,
+    };
+
+    /// <summary>
+    /// Outcome of <see cref="SignOneAsync"/> - either the rendered PDF plus
+    /// signing progress, or enough to build the same <see cref="ApiErrorExtensions.Error"/>
+    /// response <see cref="Sign"/> would have returned on its own. Shared so
+    /// <see cref="Sign"/> and <see cref="SignBatch"/> report identically for
+    /// the same failure.
+    /// </summary>
+    private sealed record SignAttemptResult
+    {
+        public required string FileName { get; init; }
+
+        public bool Success { get; private init; }
+
+        public byte[]? RenderedBytes { get; private init; }
+
+        public bool? IsFullySigned { get; private init; }
+
+        public SignatureCategory? NextExpectedCategory { get; private init; }
+
+        public int? StatusCode { get; private init; }
+
+        public string? ErrorCode { get; private init; }
+
+        public string? ErrorMessage { get; private init; }
+
+        public object? ErrorData { get; private init; }
+
+        public static SignAttemptResult SuccessResult(string fileName, byte[] renderedBytes, bool isFullySigned, SignatureCategory? nextExpectedCategory) =>
+            new()
+            {
+                FileName = fileName,
+                Success = true,
+                RenderedBytes = renderedBytes,
+                IsFullySigned = isFullySigned,
+                NextExpectedCategory = nextExpectedCategory,
+            };
+
+        public static SignAttemptResult FailureResult(string fileName, int statusCode, string errorCode, string errorMessage, object? errorData = null) =>
+            new()
+            {
+                FileName = fileName,
+                Success = false,
+                StatusCode = statusCode,
+                ErrorCode = errorCode,
+                ErrorMessage = errorMessage,
+                ErrorData = errorData,
+            };
+    }
 
     private static DocumentStatusResponse ToStatusResponse(string fileName, IReadOnlyList<DocumentSignature> signatures)
     {

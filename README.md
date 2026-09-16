@@ -28,6 +28,8 @@ resubmitting them at the next signing stage.
   - Restrict each category to callers holding the matching role/group.
   - Reject a stale or tampered file via a hash check against the previous
     stage's logged result.
+  - Batch signing: sign several documents for one category in a single
+    request, best-effort per file - one file failing doesn't stop the rest.
 - Signing status lookup for a document by file name.
 - Hash-based verification: upload a PDF and check whether it matches a
   signing event this API has logged.
@@ -72,6 +74,7 @@ by environment variables.
 | AUTH\_\_ROLECLAIMTYPE | No | Auth:RoleClaimType | Claim type carrying role/group membership | `http://schemas.microsoft.com/ws/2008/06/identity/claims/role` |
 | AUTH\_\_NAMECLAIMTYPE | No | Auth:NameClaimType | Claim type carrying the signer's display name | `http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name` |
 | DOCUMENTUPLOAD\_\_MAXFILESIZEBYTES | No | DocumentUpload:MaxFileSizeBytes | Maximum accepted upload size, in bytes | `52428800` (50 MB) |
+| DOCUMENTUPLOAD\_\_MAXBATCHSIZE | No | DocumentUpload:MaxBatchSize | Maximum number of files accepted in one batch-sign request | `20` |
 | PDFSIGNATURE\_\_FONTSIZE | No | PdfSignature:FontSize | Signature table font size, in points | `9` |
 | PDFSIGNATURE\_\_ROWHEIGHT | No | PdfSignature:RowHeight | Signature table row height, in points | `18` |
 | PDFSIGNATURE\_\_MARGINLEFT | No | PdfSignature:MarginLeft | Signature table left margin, in points | `40` |
@@ -129,6 +132,24 @@ API requires access to the following services:
 4. `POST /api/documents/verify` - hash-verification tool: upload a PDF, get
    back whether it matches a signing event this API has logged.
 
+5. `POST /api/documents/sign/batch` - signs several documents in one call.
+   `multipart/form-data` with a `Files[i].file` / `Files[i].fileName` /
+   `Files[i].category` triple per document (e.g. `Files[0].fileName`,
+   `Files[1].fileName`, ...), up to `DocumentUpload:MaxBatchSize` entries
+   (`400 BATCH_TOO_LARGE` beyond that, `400 NO_FILES_PROVIDED` for zero).
+   Each file goes through exactly the same rules as `sign` above, and files
+   are processed **sequentially, in the order submitted** - not in
+   parallel - so a duplicate or out-of-order entry within the batch itself
+   (e.g. the same file/category listed twice) is caught the same way a
+   second real request would be, rather than racing. This is a
+   **best-effort** batch, not all-or-nothing: one file failing doesn't stop
+   the rest from being attempted. The response is always `200` with a
+   `signed-documents.zip` containing one `{fileName}.pdf` entry per
+   successfully signed file, plus a `results.json` entry listing every
+   file's outcome (a failed file has no corresponding PDF entry, only a row
+   here with its `errorCode`/`errorMessage`/`errorData`, same shape as the
+   error responses below).
+
 ### Error responses
 
 Every non-2xx response is a standard `ProblemDetails` (RFC 7807) body with
@@ -152,8 +173,10 @@ Codes in use: `EMPTY_FILE`, `FILE_TOO_LARGE` (`errorData.maxSizeBytes`),
 `errorData.category`), `OUT_OF_ORDER_SIGNATURE` (`errorData.fileName`,
 `errorData.nextExpectedCategory`), `ROLE_NOT_AUTHORIZED`
 (`errorData.category`, `errorData.requiredRole`), `STALE_DOCUMENT_STATE`
-(`errorData.fileName`), `SIGNING_FAILED`. Defined in
-`src/DocumentsApi.Api/Errors/ErrorCodes.cs`.
+(`errorData.fileName`), `SIGNING_FAILED`, `NO_FILES_PROVIDED`,
+`BATCH_TOO_LARGE` (`errorData.maxBatchSize`). Defined in
+`src/DocumentsApi.Api/Errors/ErrorCodes.cs`. The per-file entries in a batch
+response's `results.json` use these same codes.
 
 A bare `401` (no token, or an invalid one) doesn't go through this - it's
 handled by the authentication middleware itself, before any controller code
@@ -168,7 +191,7 @@ dependency on Api.
 
 ```
 src/DocumentsApi.Api/                    # host project (Microsoft.NET.Sdk.Web)
-  Controllers/DocumentsController.cs     # upload / status / sign / verify
+  Controllers/DocumentsController.cs     # upload / status / sign / sign-batch / verify
   Dtos/                                  # request/response wire contracts
   Errors/                                # ErrorCodes + the ProblemDetails-building helper
   Validation/DocumentFileNameValidator.cs # file name convention parsing - unit tested
