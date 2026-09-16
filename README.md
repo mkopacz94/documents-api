@@ -1,66 +1,130 @@
 # Documents API
 
-ASP.NET Core Web API for the PIRT Dashboard's document sign-off workflow. A
-document is uploaded once, then goes through three sequential signature
+## Summary
+
+Documents API provides backend services supporting the document sign-off
+workflow within the PIRT department.
+
+A document is uploaded once, then goes through three sequential signature
 stages - **Opracował** (prepared), **Sprawdził** (checked), **Zatwierdził**
 (approved) - each by a different, authorized user. Every stage stamps a row
 of a signature table (name + UTC timestamp) onto the PDF.
 
 **This API persists nothing except the signing log itself.** There is no
 separate "document" record and no copy of the PDF anywhere server-side - a
-document's identity is its file name, and its state is whatever
-`DocumentSignature` rows are logged against that name. Upload and sign both
-hand the current PDF bytes back to the caller; the frontend displays them
-and is responsible for resubmitting them at the next signing stage.
+document's identity is its file name, and its state is whatever signature
+rows are logged against that name. Upload and sign both hand the current PDF
+bytes back to the caller; the frontend displays them and is responsible for
+resubmitting them at the next signing stage.
+
+### Current Features
+
+- Document upload
+  - Validate file type, size and the `<RepositoryId>#<ProjectName>#<Version>`
+    naming convention.
+  - Stamp a blank three-row signature table onto the uploaded PDF.
+- Sequential three-stage e-signing (Opracował → Sprawdził → Zatwierdził)
+  - Enforce signing order and reject a category that's already signed.
+  - Restrict each category to callers holding the matching role/group.
+  - Reject a stale or tampered file via a hash check against the previous
+    stage's logged result.
+- Signing status lookup for a document by file name.
+- Hash-based verification: upload a PDF and check whether it matches a
+  signing event this API has logged.
+
+Additional document-related features may be added in future releases.
+
+### How to run the application
+
+1. Clone this repository.
+2. Start the MySQL dependency: `docker compose up -d` (provisions MySQL 8 on
+   `localhost:3306`, matching the default connection string below). This
+   repository does not currently ship a Dockerfile for the API itself -
+   `docker-compose.yml` only covers the database.
+3. Configure the application by editing the configuration file or setting
+   environment variables (see Configuration below).
+4. Run the application using the .NET CLI:
+   ```bash
+   cd src/DocumentsApi.Api
+   dotnet run
+   ```
+   EF Core migrations are applied automatically on startup. Swagger UI is
+   available at `/swagger` in Development.
+
+### Configuration
+
+The application listens on Kestrel's default port configuration (override
+with `ASPNETCORE_URLS`/`ASPNETCORE_HTTP_PORTS` if needed - no fixed port is
+hardcoded).
+
+You can configure application settings using both the `appsettings.json`
+file and environment variables. `appsettings.json` values can be overridden
+by environment variables.
+
+**Double underscore (\_\_) in environment variables is mandatory.**
+
+| ENV | ENV required | Appsettings.json entry | Description | Default Value |
+| --- | --- | --- | --- | --- |
+| CONNECTIONSTRINGS\_\_DOCUMENTSDB | Yes | ConnectionStrings:DocumentsDb | MySQL connection string | *(none - the application fails to start without it)* |
+| AUTH\_\_AUTHORITY | No | Auth:Authority | External OIDC identity provider issuer URL | *(empty - falls back to header-based dev auth in Development only)* |
+| AUTH\_\_AUDIENCE | No | Auth:Audience | Expected JWT `aud` claim | *(empty)* |
+| AUTH\_\_REQUIREHTTPSMETADATA | No | Auth:RequireHttpsMetadata | Require HTTPS for JWT discovery metadata | `true` |
+| AUTH\_\_ROLECLAIMTYPE | No | Auth:RoleClaimType | Claim type carrying role/group membership | `http://schemas.microsoft.com/ws/2008/06/identity/claims/role` |
+| AUTH\_\_NAMECLAIMTYPE | No | Auth:NameClaimType | Claim type carrying the signer's display name | `http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name` |
+| DOCUMENTUPLOAD\_\_MAXFILESIZEBYTES | No | DocumentUpload:MaxFileSizeBytes | Maximum accepted upload size, in bytes | `52428800` (50 MB) |
+| PDFSIGNATURE\_\_FONTSIZE | No | PdfSignature:FontSize | Signature table font size, in points | `9` |
+| PDFSIGNATURE\_\_ROWHEIGHT | No | PdfSignature:RowHeight | Signature table row height, in points | `18` |
+| PDFSIGNATURE\_\_MARGINLEFT | No | PdfSignature:MarginLeft | Signature table left margin, in points | `40` |
+| PDFSIGNATURE\_\_MARGINRIGHT | No | PdfSignature:MarginRight | Signature table right margin, in points | `40` |
+| PDFSIGNATURE\_\_MARGINBOTTOM | No | PdfSignature:MarginBottom | Table distance from the page bottom, in points | `30` |
+| SIGNATUREPERMISSIONS\_\_OPRACOWAL | No | SignaturePermissions:Opracowal | Role/group required to sign as "Opracował" | `DocumentSigner.Opracowal` |
+| SIGNATUREPERMISSIONS\_\_SPRAWDZIL | No | SignaturePermissions:Sprawdzil | Role/group required to sign as "Sprawdził" | `DocumentSigner.Sprawdzil` |
+| SIGNATUREPERMISSIONS\_\_ZATWIERDZIL | No | SignaturePermissions:Zatwierdzil | Role/group required to sign as "Zatwierdził" | `DocumentSigner.Zatwierdzil` |
+
+If `Auth:Authority` is left empty **and** the environment is `Development`,
+the API falls back to a header-based dev auth scheme
+(`X-Dev-User`/`X-Dev-Roles`) so it can be exercised without a running OIDC
+provider. This path is never used outside Development.
+
+### External dependencies
+
+API requires access to the following services:
+
+- MySQL 8.x database, via the Pomelo EF Core provider - the only state this
+  API persists (the signing log and a failed-signing-attempt audit log).
+- An external OIDC-compliant identity provider (e.g. Keycloak) issuing
+  bearer JWTs with role/group claims, for authentication and authorization
+  in any non-Development environment.
 
 ## Workflow
 
-1. `POST /api/documents` - upload a new document. Rejected if:
-   - empty, over the size limit, or not a PDF
-   - the file name doesn't follow the `<RepositoryId>#<ProjectName>#<Version>.pdf`
-     convention (e.g. `729#VIPD2#v1.00.16.pdf`) - `Version` must contain
-     exactly one or two dots (`v1.00` and `v1.00.16` are both valid; `v1`
-     and `v1.00.16.20` are not)
-
-   On success, a blank three-row signature table is stamped onto the last
-   page and the **PDF bytes are returned in the response body** (no
-   `Content-Disposition`, so a browser renders it inline) for the frontend
-   to display. Nothing is written to the database at this point. The
-   canonical file name (identity, used in every later call) comes back in
-   the `X-File-Name` header.
+1. `POST /api/documents` - upload a new document. Rejected if empty, over
+   the size limit, not a PDF, or the file name doesn't follow the
+   `<RepositoryId>#<ProjectName>#<Version>.pdf` convention (e.g.
+   `729#VIPD2#v1.00.16.pdf`) - `Version` must contain exactly one or two
+   dots. On success, a blank three-row signature table is stamped onto the
+   last page and the PDF bytes are returned in the response body (no
+   `Content-Disposition`, so a browser renders it inline). Nothing is
+   written to the database at this point. The canonical file name (used in
+   every later call) comes back in the `X-File-Name` header.
 
 2. `GET /api/documents/status?fileName=...` - current status: which
    categories are signed, by whom, and which category is expected next.
-   Pure metadata from the database; backs the "view with signing
-   capability" screen (the frontend renders its own confirmation dialog
-   before calling sign).
 
 3. `POST /api/documents/sign` - signs the document for one category.
-   `multipart/form-data` with three fields:
-   - `file` - the PDF **exactly as the caller currently holds it** (what
-     upload or the previous sign call returned)
-   - `fileName` - the value from `X-File-Name` (see note below on why this
-     is a separate field rather than the file's own name)
-   - `category` - `Opracowal` / `Sprawdzil` / `Zatwierdzil`
-
-   For the second and third stage, the uploaded file is hashed and compared
-   against the immediately preceding stage's logged hash before anything is
-   stamped - a stale or tampered copy is rejected (409) rather than
-   silently signed over. Also rejected if:
-   - that category is already signed for this file name (this is also what
-     enforces the "no two uploads with the same name" rule: once a name has
-     any signature logged, that stage can't be logged again - bump the
-     version to start over)
-   - it's signed out of order (categories must be applied Opracował → Sprawdził → Zatwierdził)
-   - the caller doesn't hold the role mapped to that category (403)
-
-   The signer's identity is taken from the authenticated caller's claims,
-   never from the request body. On success, the updated PDF is returned as
-   an attachment (`Content-Disposition: attachment`) for the user to
-   download, with `X-Fully-Signed` and (if more stages remain)
-   `X-Next-Expected-Category` headers. This is the only endpoint that
-   writes to the database - one `INSERT` per successful call, nothing else
-   to keep in sync.
+   `multipart/form-data` with three fields: `file` (the PDF exactly as the
+   caller currently holds it), `fileName` (the value from `X-File-Name`),
+   and `category` (`Opracowal` / `Sprawdzil` / `Zatwierdzil`). For the
+   second and third stage, the uploaded file is hashed and compared against
+   the immediately preceding stage's logged hash before anything is
+   stamped - a stale or tampered copy is rejected (`409`). Also rejected if
+   that category is already signed (`409`), it's signed out of order
+   (`409`), or the caller doesn't hold the role mapped to that category
+   (`403`). The signer's identity is taken from the authenticated caller's
+   claims, never from the request body. On success, the updated PDF is
+   returned as an attachment, with `X-Fully-Signed` and (if more stages
+   remain) `X-Next-Expected-Category` headers. This is the only endpoint
+   that writes to the database.
 
 4. `POST /api/documents/verify` - hash-verification tool: upload a PDF, get
    back whether it matches a signing event this API has logged.
@@ -70,8 +134,7 @@ and is responsible for resubmitting them at the next signing stage.
 Every non-2xx response is a standard `ProblemDetails` (RFC 7807) body with
 two extra fields: a stable `errorCode` for the frontend to map to a
 localized message, and (where relevant) an `errorData` object carrying the
-raw values needed to build that message - never embedded in the English
-`detail` text, since word order and pluralization differ per language.
+raw values needed to build that message.
 
 ```json
 {
@@ -83,136 +146,18 @@ raw values needed to build that message - never embedded in the English
 }
 ```
 
-Treat `detail` as a developer-facing fallback (logs, Swagger, debugging) -
-`errorCode` is what a localized frontend should actually key off. Codes in
-use: `EMPTY_FILE`, `FILE_TOO_LARGE` (`errorData.maxSizeBytes`),
+Codes in use: `EMPTY_FILE`, `FILE_TOO_LARGE` (`errorData.maxSizeBytes`),
 `UNSUPPORTED_FILE_TYPE`, `INVALID_FILE_NAME`, `FILE_NAME_REQUIRED`,
 `FILE_PROCESSING_FAILED`, `ALREADY_SIGNED` (`errorData.fileName`,
 `errorData.category`), `OUT_OF_ORDER_SIGNATURE` (`errorData.fileName`,
 `errorData.nextExpectedCategory`), `ROLE_NOT_AUTHORIZED`
 (`errorData.category`, `errorData.requiredRole`), `STALE_DOCUMENT_STATE`
 (`errorData.fileName`), `SIGNING_FAILED`. Defined in
-`src/DocumentsApi.Api/Errors/ErrorCodes.cs`; built via the
-`ControllerBase.Error(...)` extension in `Errors/ApiErrorExtensions.cs`, so
-the shape is the same one ASP.NET Core's own automatic model-validation
-errors already use.
+`src/DocumentsApi.Api/Errors/ErrorCodes.cs`.
 
 A bare `401` (no token, or an invalid one) doesn't go through this - it's
 handled by the authentication middleware itself, before any controller code
 runs, so it currently has no body at all.
-
-### Why `fileName` is a separate form field
-
-The obvious design would derive identity from the uploaded file's own
-multipart file name. That breaks in practice: a browser round-trips the PDF
-as `fetch(...).then(r => r.blob())`, and a `Blob` carries no name at all (only
-a `File` does) - it's easy for a frontend to forget to re-attach one, or to
-have an HTTP client silently substitute a local temp name. So identity is
-carried explicitly in its own field instead, populated from the `X-File-Name`
-header upload returned.
-
-## Authentication & permission groups
-
-This API does **not** manage its own users. It trusts an external identity
-provider and expects a bearer JWT with role/group claims - configure the
-provider under `Auth` in `appsettings.json`:
-
-```json
-"Auth": {
-  "Authority": "https://your-identity-provider/issuer",
-  "Audience": "documents-api",
-  "RoleClaimType": "...",
-  "NameClaimType": "..."
-}
-```
-
-Each signature category requires a distinct role/group from the provider,
-mapped under `SignaturePermissions`:
-
-```json
-"SignaturePermissions": {
-  "Opracowal": "DocumentSigner.Opracowal",
-  "Sprawdzil": "DocumentSigner.Sprawdzil",
-  "Zatwierdzil": "DocumentSigner.Zatwierdzil"
-}
-```
-
-Create these three groups in your identity provider and assign users to
-whichever stage(s) they're authorized to sign.
-
-### Local development without a real identity provider
-
-If `Auth:Authority` is empty **and** the environment is `Development`, the
-API falls back to a header-based dev auth scheme
-(`Auth/DevHeaderAuthenticationHandler.cs`) so it can be exercised without a
-running OIDC provider. Send:
-
-- `X-Dev-User: alice` - the signed-in user's name
-- `X-Dev-Roles: DocumentSigner.Opracowal,DocumentSigner.Sprawdzil` - comma-separated roles
-
-This path is never used outside Development.
-
-## Running locally
-
-### 1. Start MySQL
-
-```bash
-docker compose up -d
-```
-
-Starts MySQL 8 on `localhost:3306` (db `documents_api`, user
-`documents_api` / `changeme` - matches the default connection string).
-
-### 2. Run the API
-
-```bash
-cd src/DocumentsApi.Api
-dotnet run
-```
-
-Migrations apply automatically on startup. Swagger UI is at `/swagger` in Development.
-
-### 3. Try it (dev header auth)
-
-```bash
-# Upload - the response body IS the PDF (for display); identity comes back in a header
-curl -D - -o current.pdf -X POST http://localhost:5203/api/documents \
-  -H "X-Dev-User: alice" \
-  -F "file=@729#VIPD2#v1.00.16.pdf;type=application/pdf"
-# => X-File-Name: 729#VIPD2#v1.00.16   (current.pdf is the file to show the user)
-
-# Sign as Opracował - forward the exact bytes just received, plus the file name
-curl -o current.pdf -X POST http://localhost:5203/api/documents/sign \
-  -H "X-Dev-User: alice" -H "X-Dev-Roles: DocumentSigner.Opracowal" \
-  -F "fileName=729#VIPD2#v1.00.16" -F "category=Opracowal" \
-  -F "file=@current.pdf;type=application/pdf"
-
-# Sign as Sprawdził - forward what the previous call just returned
-curl -o current.pdf -X POST http://localhost:5203/api/documents/sign \
-  -H "X-Dev-User: bob" -H "X-Dev-Roles: DocumentSigner.Sprawdzil" \
-  -F "fileName=729#VIPD2#v1.00.16" -F "category=Sprawdzil" \
-  -F "file=@current.pdf;type=application/pdf"
-
-# ... and so on for Zatwierdzil - current.pdf ends up fully signed
-
-# Check status at any point
-curl -G http://localhost:5203/api/documents/status -H "X-Dev-User: alice" \
-  --data-urlencode "fileName=729#VIPD2#v1.00.16"
-
-# Verify a PDF against the database
-curl -X POST http://localhost:5203/api/documents/verify \
-  -H "X-Dev-User: alice" -F "file=@current.pdf;type=application/pdf"
-```
-
-## What's deliberately not implemented yet
-
-Per the requirements, this is stage 1. **Not** implemented:
-
-- Persisting the document server-side, copying it into a category-specific
-  folder, and exposing a download portal for the signer. Only the signing
-  log is stored; reintroducing file storage later (for stage 2) means
-  adding a file store service and wiring it into `DocumentsController`
-  without changing the DB schema.
 
 ## Project layout
 
@@ -252,9 +197,9 @@ tests/DocumentsApi.Api.Tests/            # xUnit - references Api directly, no H
 dotnet test tests/DocumentsApi.Api.Tests/DocumentsApi.Api.Tests.csproj
 ```
 
-`DocumentFileNameValidator` is deliberately a pure `string -> bool`/struct function
-with no ASP.NET Core or EF Core dependencies, so its tests need no mocking,
-no `IFormFile`, and no database. `SigningWorkflowService` and
+`DocumentFileNameValidator` is a pure `string -> bool`/struct function with
+no ASP.NET Core or EF Core dependencies, so its tests need no mocking, no
+`IFormFile`, and no database. `SigningWorkflowService` and
 `DocumentProcessingService` are tested against hand-rolled fakes of their
 interfaces rather than a mocking library. `DocumentSignatureRepository` is
 the one class that genuinely needs EF Core, so its tests run against the EF
@@ -263,48 +208,11 @@ which InMemory can't reproduce (it doesn't enforce unique indexes), so that
 one test overrides `SaveChangesAsync` to throw the same shape of
 `DbUpdateException`/`MySqlException` the real driver would.
 
-Core isn't a Web SDK project, but a few of its types (`AuthenticationHandler<T>`,
-`IFormFile`) come from ASP.NET Core, so its `.csproj` adds
-`<FrameworkReference Include="Microsoft.AspNetCore.App" />` rather than
-pulling in the full Web SDK.
-
-### How signing works without a document record
-
-There's no `Documents` table - just `DocumentSignatures` (one row per
-completed stage, keyed by file name + category) and `SigningFailures`. A
-document's current state is always derived by querying signatures for its
-file name; nothing else needs to be kept in sync. Concretely:
-
-- **Order and duplicates**: querying existing signatures for a file name and
-  checking which categories are present is enough to know what's next and
-  reject an already-used category - which is also what stops a name from
-  being reused after it's started.
-- **Staleness/tamper check**: each signature row stores the hash of the
-  document *after* that stage was applied. Signing category *N* hashes the
-  submitted file and compares it to category *N-1*'s stored hash (skipped
-  for the first category, which has no predecessor).
-- **One write per sign call**: the row inserted for a signature already
-  carries everything (category, signer, timestamp, hash) - there's no
-  second write (like a separate "current hash" column) that could drift out
-  of sync, so no transaction is needed to keep two writes atomic.
-
-`PdfSigningService` has two entry points:
-- `RenderSignatureTable` draws the full blank table (all three category
-  labels, empty signer/date cells) onto the freshly uploaded PDF. Used once,
-  at upload time.
-- `FillSignatureRow` draws just one row's signer/date cells, at a position
-  computed from the same fixed layout (margins, row height, column widths)
-  used to draw the table in the first place. It's given whatever PDF bytes
-  the caller currently holds and only touches that one row - it never
-  redraws borders or other rows, so there's no original copy to fall back
-  to and no risk of duplicating table artwork.
-
 ## Managing migrations
 
 The `DbContext` lives in Core, but EF tooling needs a runnable startup
-project (Api) to load design-time services from - both projects reference
-`Microsoft.EntityFrameworkCore.Design` for this reason. Run commands from
-the repo root:
+project (Api) to load design-time services from. Run commands from the repo
+root:
 
 ```bash
 dotnet tool install --global dotnet-ef   # first time only
@@ -314,15 +222,12 @@ dotnet ef migrations add <Name> \
   -o Data/Migrations
 ```
 
-## Configuration reference
+## What's deliberately not implemented yet
 
-| Section              | Key               | Meaning                                              | Default |
-|-----------------------|-------------------|-------------------------------------------------------|---------|
-| `PdfSignature`        | `FontSize`        | Signature table font size (points)                    | `9`     |
-|                       | `RowHeight`       | Row height (points)                                    | `18`    |
-|                       | `MarginLeft/Right`| Table left/right margins (points)                      | `40`    |
-|                       | `MarginBottom`    | Distance from page bottom (points)                     | `30`    |
-| `DocumentUpload`      | `MaxFileSizeBytes`| Upload size limit                                      | `50 MB` |
-| `Auth`                | `Authority`       | External identity provider issuer URL                  | *(empty - dev fallback)* |
-|                       | `Audience`        | Expected JWT audience                                  | *(empty)* |
-| `SignaturePermissions`| `Opracowal` etc.  | Role/group name per signature category                | `DocumentSigner.*` |
+Per the requirements, this is stage 1. **Not** implemented:
+
+- Persisting the document server-side, copying it into a category-specific
+  folder, and exposing a download portal for the signer. Only the signing
+  log is stored; reintroducing file storage later (for stage 2) means
+  adding a file store service and wiring it into `DocumentsController`
+  without changing the DB schema.
