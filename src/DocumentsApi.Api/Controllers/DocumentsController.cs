@@ -324,16 +324,90 @@ public class DocumentsController : ControllerBase
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> Verify([FromForm] UploadDocumentRequest request, CancellationToken cancellationToken)
     {
-        if (request.File.Length == 0)
+        var result = await VerifyOneAsync(request.File, cancellationToken);
+        if (result.ErrorCode is not null)
         {
-            _logger.LogInformation("Verify rejected: empty file.");
-            return this.Error(StatusCodes.Status400BadRequest, ErrorCodes.EmptyFile, "The uploaded file is empty.");
+            return this.Error(StatusCodes.Status400BadRequest, result.ErrorCode, result.ErrorMessage!);
+        }
+
+        return Ok(new VerifyDocumentResponse
+        {
+            Found = result.Found,
+            FileName = result.FileName,
+            MatchedStage = result.MatchedStage,
+            SignedBy = result.SignedBy,
+            SignedAtUtc = result.SignedAtUtc,
+        });
+    }
+
+    /// <summary>
+    /// Verifies several documents in one call. Unlike sign, this is naturally
+    /// best-effort per file already - "not found" is a routine, expected
+    /// outcome for any file, not a rejection - so every item (even an empty
+    /// file) just becomes a row in the response array rather than failing
+    /// the whole request. No file bytes are ever returned, so - unlike
+    /// sign/batch - the response is plain JSON, not a zip.
+    /// </summary>
+    [HttpPost("verify/batch")]
+    [RequestSizeLimit(BatchRequestSizeLimitCeilingBytes)]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> VerifyBatch([FromForm] VerifyDocumentsBatchRequest request, CancellationToken cancellationToken)
+    {
+        if (request.Files.Count == 0)
+        {
+            _logger.LogInformation("Batch verify rejected: no files provided.");
+            return this.Error(StatusCodes.Status400BadRequest, ErrorCodes.NoFilesProvided, "At least one file must be provided.");
+        }
+
+        if (request.Files.Count > _uploadOptions.MaxBatchSize)
+        {
+            _logger.LogInformation(
+                "Batch verify rejected: {FileCount} files exceeds the {MaxBatchSize} limit.",
+                request.Files.Count, _uploadOptions.MaxBatchSize);
+            return this.Error(
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BatchTooLarge,
+                $"A batch cannot contain more than {_uploadOptions.MaxBatchSize} files.",
+                new { maxBatchSize = _uploadOptions.MaxBatchSize });
+        }
+
+        var results = new List<VerifyBatchResultEntry>();
+        foreach (var file in request.Files)
+        {
+            results.Add(await VerifyOneAsync(file, cancellationToken));
+        }
+
+        var found = results.Count(r => r.Found);
+        _logger.LogInformation("Batch verify completed: {FoundCount}/{TotalCount} file(s) matched.", found, results.Count);
+
+        return Ok(results);
+    }
+
+    /// <summary>
+    /// The hash-and-lookup sequence for one file, shared by <see cref="Verify"/>
+    /// and <see cref="VerifyBatch"/>. An empty file comes back as an entry
+    /// with <see cref="VerifyBatchResultEntry.ErrorCode"/> set rather than
+    /// throwing, so a batch caller gets it as a row like any other outcome;
+    /// the single-file <see cref="Verify"/> action turns that same field into
+    /// its usual 400 response.
+    /// </summary>
+    private async Task<VerifyBatchResultEntry> VerifyOneAsync(IFormFile file, CancellationToken cancellationToken)
+    {
+        if (file.Length == 0)
+        {
+            _logger.LogInformation("Verify rejected for {FileName}: empty file.", file.FileName);
+            return new VerifyBatchResultEntry
+            {
+                SubmittedFileName = file.FileName,
+                ErrorCode = ErrorCodes.EmptyFile,
+                ErrorMessage = "The uploaded file is empty.",
+            };
         }
 
         byte[] bytes;
         using (var memoryStream = new MemoryStream())
         {
-            await request.File.CopyToAsync(memoryStream, cancellationToken);
+            await file.CopyToAsync(memoryStream, cancellationToken);
             bytes = memoryStream.ToArray();
         }
 
@@ -343,21 +417,22 @@ public class DocumentsController : ControllerBase
         if (signature is null)
         {
             _logger.LogInformation("Verify: no signature found matching hash {Hash}.", hash);
-            return Ok(new VerifyDocumentResponse { Found = false });
+            return new VerifyBatchResultEntry { SubmittedFileName = file.FileName, Found = false };
         }
 
         _logger.LogInformation(
             "Verify: hash matched {FileName}/{Category}, signed by {SignedBy}.",
             signature.FileName, signature.Category, signature.SignedBy);
 
-        return Ok(new VerifyDocumentResponse
+        return new VerifyBatchResultEntry
         {
+            SubmittedFileName = file.FileName,
             Found = true,
             FileName = signature.FileName,
             MatchedStage = signature.Category.DisplayName(),
             SignedBy = signature.SignedBy,
             SignedAtUtc = signature.SignedAtUtc,
-        });
+        };
     }
 
     private static int StatusCodeFor(SigningFailureReason reason) => reason switch

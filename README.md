@@ -150,6 +150,22 @@ API requires access to the following services:
    here with its `errorCode`/`errorMessage`/`errorData`, same shape as the
    error responses below).
 
+6. `POST /api/documents/verify/batch` - verifies several files in one call.
+   `multipart/form-data` with the file field repeated - `Files` sent
+   multiple times (`-F "Files=@a.pdf" -F "Files=@b.pdf"`), **not** the
+   indexed `Files[i].*` pattern `sign/batch` uses: a per-item type with only
+   an `IFormFile` property and nothing else alongside it doesn't reliably
+   bind that way. Same `MaxBatchSize`/`400` limits as `sign/batch`. Unlike
+   signing, verifying is inherently best-effort already - a "not found" is
+   a routine, expected outcome for any file, not a rejection - so every
+   file (even an empty one) just becomes a row in the response, never fails
+   the whole request. No file bytes are ever returned, so the response is
+   plain JSON (`200`), not a zip: an array of
+   `{ submittedFileName, found, fileName, matchedStage, signedBy, signedAtUtc, errorCode, errorMessage }`,
+   one per file in the order submitted. `submittedFileName` is the file's
+   own multipart name (verify never asks for a canonical identity the way
+   sign does), just enough to tell the rows apart.
+
 ### Error responses
 
 Every non-2xx response is a standard `ProblemDetails` (RFC 7807) body with
@@ -191,7 +207,7 @@ dependency on Api.
 
 ```
 src/DocumentsApi.Api/                    # host project (Microsoft.NET.Sdk.Web)
-  Controllers/DocumentsController.cs     # upload / status / sign / sign-batch / verify
+  Controllers/DocumentsController.cs     # upload / status / sign(+batch) / verify(+batch)
   Dtos/                                  # request/response wire contracts
   Errors/                                # ErrorCodes + the ProblemDetails-building helper
   Validation/DocumentFileNameValidator.cs # file name convention parsing - unit tested
